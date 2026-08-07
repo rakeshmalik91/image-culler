@@ -1,0 +1,258 @@
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from culler.culler_engine import CullingSession, ImageItem, FlagState
+from culler.db_manager import DatabaseManager
+
+
+class TestCullingEngine(unittest.TestCase):
+    """
+    Automated Unit Test Suite for CullingSession & ImageItem engine logic.
+    """
+
+    def setUp(self):
+        self.temp_db_fd, self.temp_db_path = tempfile.mkstemp(suffix=".db")
+        os.close(self.temp_db_fd)
+        self.db = DatabaseManager(db_path=self.temp_db_path)
+        self.session = CullingSession(db_manager=self.db)
+
+    def tearDown(self):
+        if hasattr(self, "db") and self.db:
+            try:
+                self.db.close()
+            except Exception:
+                pass
+        if os.path.exists(self.temp_db_path):
+            try:
+                os.remove(self.temp_db_path)
+            except Exception:
+                pass
+
+    def test_extract_base_stem(self):
+        """
+        Verify extracting root photo stems across RAW, JPG, and edited variant patterns.
+        """
+        self.assertEqual(CullingSession.extract_base_stem("PORTRAIT_1"), "portrait")
+        self.assertEqual(CullingSession.extract_base_stem("SUNSET_crop"), "sunset")
+        self.assertEqual(CullingSession.extract_base_stem("LANDSCAPE_edited"), "landscape")
+        self.assertEqual(CullingSession.extract_base_stem("PHOTO-Edit"), "photo")
+
+    def test_item_flag_rating_tag_mutations(self):
+        """
+        Verify setting flags, star ratings, and tags on ImageItem objects.
+        """
+        p = Path("D:/Photos/DSC_0001.JPG")
+        item = ImageItem(p)
+
+        item.flag = FlagState.PICK
+        item.rating = 4
+        item.add_tag("landscape")
+        item.add_tag("favorite")
+
+        self.assertEqual(item.flag, FlagState.PICK)
+        self.assertEqual(item.rating, 4)
+        self.assertTrue(item.has_tag("landscape"))
+        self.assertTrue(item.has_tag("favorite"))
+        self.assertEqual(item.tags_str, "Favorite, Landscape")
+
+        item.remove_tag("landscape")
+        self.assertFalse(item.has_tag("landscape"))
+        self.assertEqual(item.tags_str, "Favorite")
+
+    def test_filtering_items_by_flag_rating_format(self):
+        """
+        Verify get_filtered_items filtering by flag (Pick/Reject/Unflagged), rating (1-5 stars), and format (.ARW/.JPG).
+        """
+        item1 = ImageItem(Path("D:/Photos/DSC_0001.ARW"))
+        item1.flag = FlagState.PICK
+        item1.rating = 5
+
+        item2 = ImageItem(Path("D:/Photos/DSC_0002.JPG"))
+        item2.flag = FlagState.REJECT
+        item2.rating = 2
+
+        item3 = ImageItem(Path("D:/Photos/DSC_0003.JPG"))
+        item3.flag = FlagState.UNFLAGGED
+        item3.rating = 0
+        item3.add_tag("Blur")
+
+        self.session.items = [item1, item2, item3]
+
+        # Filter Pick
+        picks = self.session.get_filtered_items(flag_filter="Pick")
+        self.assertEqual(len(picks), 1)
+        self.assertEqual(picks[0].path.name, "DSC_0001.ARW")
+
+        # Filter Rating >= 3
+        rated = self.session.get_filtered_items(rating_filter=3)
+        self.assertEqual(len(rated), 1)
+        self.assertEqual(rated[0].rating, 5)
+
+        # Filter Format .ARW
+        raws = self.session.get_filtered_items(format_filter=".ARW")
+        self.assertEqual(len(raws), 1)
+        self.assertEqual(raws[0].path.name, "DSC_0001.ARW")
+
+        # Filter Tag Blur
+        blurred = self.session.get_filtered_items(tag_filter="Blur")
+        self.assertEqual(len(blurred), 1)
+        self.assertEqual(blurred[0].path.name, "DSC_0003.JPG")
+
+    def test_unflag_unrate_untag_all(self):
+        """
+        Verify unflag_all_items, unrate_all_items, and untag_all_items batch operations.
+        """
+        item1 = ImageItem(Path("D:/Photos/DSC_0001.JPG"))
+        item1.flag = FlagState.PICK
+        item1.rating = 4
+        item1.add_tag("portrait")
+
+        item2 = ImageItem(Path("D:/Photos/DSC_0002.JPG"))
+        item2.flag = FlagState.REJECT
+        item2.rating = 5
+        item2.add_tag("action")
+
+        self.session.items = [item1, item2]
+
+        # Unflag all
+        unflagged_count = self.session.unflag_all_items()
+        self.assertEqual(unflagged_count, 2)
+        self.assertEqual(item1.flag, FlagState.UNFLAGGED)
+        self.assertEqual(item2.flag, FlagState.UNFLAGGED)
+
+        # Unrate all
+        unrated_count = self.session.unrate_all_items()
+        self.assertEqual(unrated_count, 2)
+        self.assertEqual(item1.rating, 0)
+        self.assertEqual(item2.rating, 0)
+
+        # Untag all
+        untagged_count = self.session.untag_all_items()
+        self.assertEqual(untagged_count, 2)
+        self.assertFalse(item1.tags)
+        self.assertFalse(item2.tags)
+
+    @patch("send2trash.send2trash")
+    def test_move_items_to_trash(self, mock_send2trash):
+        """
+        Verify move_items_to_trash invokes send2trash and removes items from session.
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            f1 = tmp_path / "TEST_001.JPG"
+            f2 = tmp_path / "TEST_001.ARW"
+            f1.touch()
+            f2.touch()
+
+            item = ImageItem(f1)
+            item.stacked_paths = [f1, f2]
+            item.is_stacked = True
+            self.session.items = [item]
+
+            moved_count = self.session.move_items_to_trash([item])
+            self.assertEqual(moved_count, 2)
+            self.assertEqual(mock_send2trash.call_count, 2)
+            self.assertEqual(len(self.session.items), 0)
+
+    @patch("send2trash.send2trash")
+    def test_delete_only_jpg_item(self, mock_send2trash):
+        """
+        Verify that selecting only a standalone JPG photo and moving to trash works cleanly.
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            f_jpg = tmp_path / "PHOTO_ONLY.JPG"
+            f_jpg.touch()
+
+            jpg_item = ImageItem(f_jpg)
+            self.session.items = [jpg_item]
+
+            moved_count = self.session.move_items_to_trash([jpg_item])
+            self.assertEqual(moved_count, 1)
+            self.assertEqual(mock_send2trash.call_count, 1)
+            self.assertEqual(len(self.session.items), 0)
+
+    @patch("send2trash.send2trash")
+    def test_delete_stacked_jpg_only_preserves_raw(self, mock_send2trash):
+        """
+        Verify that specifying format_filter='.jpg' deletes ONLY the JPG file from a stacked pair while preserving the ARW RAW file.
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            f1 = tmp_path / "PAIR_001.ARW"
+            f2 = tmp_path / "PAIR_001.JPG"
+            f1.touch()
+            f2.touch()
+
+            item = ImageItem(f1)
+            item.stacked_paths = [f1, f2]
+            item.is_stacked = True
+            self.session.items = [item]
+
+            moved_count = self.session.move_items_to_trash([item], format_filter="JPG")
+            self.assertEqual(moved_count, 1)
+            self.assertEqual(mock_send2trash.call_count, 1)
+            mock_send2trash.assert_called_once_with(str(f2))
+            self.assertEqual(len(self.session.items), 1)
+            self.assertEqual(self.session.items[0].path, f1)
+            self.assertFalse(self.session.items[0].is_stacked)
+
+    def test_detector_config_loader(self):
+        """
+        Verify that get_blur_methods_config and get_duplicate_methods_config load algorithm configs from JSON correctly.
+        """
+        from culler.detectors.config_loader import get_blur_methods_config, get_duplicate_methods_config
+        blur_cfg = get_blur_methods_config()
+        dup_cfg = get_duplicate_methods_config()
+
+        self.assertIn("yolo_subject", blur_cfg)
+        self.assertIn("laplacian", blur_cfg)
+        self.assertIn("dhash", dup_cfg)
+        self.assertEqual(len(blur_cfg), 7)
+        self.assertEqual(len(dup_cfg), 3)
+
+    def test_clear_all_metadata(self):
+        """
+        Verify that clear_all_metadata resets flags, tags, and ratings across all items.
+        """
+        item = ImageItem(Path("D:/Photos/IMG_001.JPG"))
+        item.flag = FlagState.PICK
+        item.rating = 5
+        item.add_tag("Blur")
+        self.session.items = [item]
+
+        count = self.session.clear_all_metadata()
+        self.assertEqual(count, 1)
+        self.assertEqual(item.flag, FlagState.UNFLAGGED)
+        self.assertEqual(item.rating, 0)
+        self.assertEqual(len(item.tags), 0)
+
+    @patch.object(CullingSession, "compute_sharpness_scores")
+    def test_scan_for_blur_sensitivity_one_percent(self, mock_compute_scores):
+        """
+        Verify scan_for_blur handles 1% sensitivity cutoff cleanly.
+        """
+        items = []
+        for i in range(100):
+            item = ImageItem(Path(f"D:/Photos/IMG_{i:03d}.JPG"))
+            item.sharpness_score = float(i + 1)
+            items.append(item)
+
+        self.session.items = items
+        flagged = self.session.scan_for_blur(bottom_percentile=1.0, method="laplacian")
+
+        # 1% of 100 items is exactly 1 item (the lowest sharpness score 1.0)
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].path.name, "IMG_000.JPG")
+        self.assertEqual(flagged[0].flag, FlagState.REJECT)
+        self.assertTrue(flagged[0].has_tag("Blur"))
+
+
+if __name__ == "__main__":
+    unittest.main()

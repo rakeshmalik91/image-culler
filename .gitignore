@@ -1,0 +1,17 @@
+__pycache__
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.vscode/
+.idea/
+*.log
+culler_debug.log
+cull_manifest.json
+cull_manifest.csv
+*.db
+*.sqlite
+culler.db
+Selected/
+_Rejected/
+_Trash/
