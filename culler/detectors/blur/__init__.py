@@ -1,6 +1,9 @@
 """
 Blur & Sharpness Detection Algorithms Package.
-Exposes all 7 focus algorithms and the router function.
+Exposes 3 focus algorithms and the router function:
+  1. Laplacian (default, ultra-fast)
+  2. AI Subject Focus (YOLO + ROI + Patch Grid)
+  3. FFT Frequency Analysis (motion blur)
 """
 
 from typing import Any, Optional
@@ -14,17 +17,16 @@ except ImportError:
     np = None
 
 from .laplacian import compute_laplacian_sharpness
-from .tenengrad import compute_tenengrad_sharpness
-from .brenner import compute_brenner_sharpness
 from .fft import compute_fft_sharpness
-from .local_var import compute_local_var_sharpness
 from .bird_subject import compute_bird_subject_sharpness
-from .yolo_subject import compute_yolo_subject_sharpness
+from .yolo_subject import compute_ai_subject_sharpness, compute_yolo_subject_sharpness
 
 
 def calculate_sharpness(pil_img: Image.Image, method: str = "laplacian", yolo_model: Optional[Any] = None) -> float:
     """
     Unified router delegating to individual blur detection modules.
+    Supports 3 algorithms: 'laplacian', 'ai_subject', 'fft'.
+    Old method names are silently redirected for backward compatibility.
     """
     if cv2 is None or np is None or pil_img is None:
         return 0.0
@@ -32,18 +34,16 @@ def calculate_sharpness(pil_img: Image.Image, method: str = "laplacian", yolo_mo
     gray = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
     m = (method or "laplacian").lower()
 
-    if m == "tenengrad":
-        return compute_tenengrad_sharpness(gray)
-    elif m == "brenner":
-        return compute_brenner_sharpness(gray)
+    # AI Subject Focus (covers old yolo_subject, bird_subject, local_var aliases)
+    if m in ("ai_subject", "yolo_subject", "yolo", "yolo_bird_eye", "bird_eye_yolo",
+             "yolo_eye", "bird_subject", "local_var"):
+        return compute_ai_subject_sharpness(gray, pil_img, yolo_model=yolo_model)
+
+    # FFT Frequency Analysis
     elif m == "fft":
         return compute_fft_sharpness(gray)
-    elif m == "local_var":
-        return compute_local_var_sharpness(gray)
-    elif m == "bird_subject":
-        return compute_bird_subject_sharpness(gray)
-    elif m in ("yolo_subject", "yolo", "yolo_bird_eye", "bird_eye_yolo", "yolo_eye"):
-        return compute_yolo_subject_sharpness(gray, pil_img, yolo_model=yolo_model)
+
+    # Laplacian (default — also catches old tenengrad/brenner aliases)
     else:
         return compute_laplacian_sharpness(gray)
 
@@ -51,10 +51,8 @@ def calculate_sharpness(pil_img: Image.Image, method: str = "laplacian", yolo_mo
 __all__ = [
     "calculate_sharpness",
     "compute_laplacian_sharpness",
-    "compute_tenengrad_sharpness",
-    "compute_brenner_sharpness",
     "compute_fft_sharpness",
-    "compute_local_var_sharpness",
     "compute_bird_subject_sharpness",
+    "compute_ai_subject_sharpness",
     "compute_yolo_subject_sharpness",
 ]

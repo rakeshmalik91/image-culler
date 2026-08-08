@@ -160,15 +160,89 @@ class DuplicateScanDialog(ctk.CTkToplevel):
         self.slider_thresh.set(initial_threshold)
         self.slider_thresh.pack(side="left", fill="x", expand=True)
 
+        # Configurable Actions for Keeper (Sharpest Photo in Each Group)
+        f_keeper = ctk.CTkFrame(right_panel, corner_radius=6, fg_color="#1a1a1a", border_width=1, border_color="#2b9348")
+        f_keeper.pack(fill="x", pady=(6, 2))
+
+        lbl_keeper_head = ctk.CTkLabel(
+            f_keeper,
+            text="🏆 Keeper Actions (sharpest photo in each group):",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#2b9348"
+        )
+        lbl_keeper_head.pack(anchor="w", padx=10, pady=(6, 4))
+
+        # Keeper Selection Method
+        f_keeper_method = ctk.CTkFrame(f_keeper, fg_color="transparent")
+        f_keeper_method.pack(fill="x", padx=10, pady=(0, 4))
+
+        lbl_kmethod = ctk.CTkLabel(f_keeper_method, text="Select Best By:", font=ctk.CTkFont(size=11, weight="bold"))
+        lbl_kmethod.pack(side="left", padx=(0, 4))
+
+        self.combo_keeper_method = ctk.CTkOptionMenu(
+            f_keeper_method,
+            values=["Sharpest (Default)", "AI Eye Focus (Bird/Wildlife)", "Largest File", "Newest", "Oldest"],
+            width=220,
+            height=26,
+            dynamic_resizing=False
+        )
+        self.combo_keeper_method.set("Sharpest (Default)")
+        self.combo_keeper_method.pack(side="left")
+
+        f_keeper_row = ctk.CTkFrame(f_keeper, fg_color="transparent")
+        f_keeper_row.pack(fill="x", padx=10, pady=(0, 6))
+
+        # Keeper Flag Dropdown
+        lbl_kflag = ctk.CTkLabel(f_keeper_row, text="Flag:", font=ctk.CTkFont(size=11, weight="bold"))
+        lbl_kflag.pack(side="left", padx=(0, 4))
+
+        self.combo_keeper_flag = ctk.CTkOptionMenu(
+            f_keeper_row,
+            values=["Pick", "Unflagged", "None"],
+            width=95,
+            height=26,
+            dynamic_resizing=False
+        )
+        self.combo_keeper_flag.set("Pick")
+        self.combo_keeper_flag.pack(side="left", padx=(0, 14))
+
+        # Keeper Tag Checkbox
+        self.chk_keeper_tag_var = ctk.StringVar(value="Duplicate")
+        self.chk_keeper_tag = ctk.CTkCheckBox(
+            f_keeper_row,
+            text="Tag: 'Duplicate'",
+            variable=self.chk_keeper_tag_var,
+            onvalue="Duplicate",
+            offvalue="",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            checkbox_width=18,
+            checkbox_height=18
+        )
+        self.chk_keeper_tag.pack(side="left", padx=(0, 14))
+
+        # Keeper Star Rating Dropdown
+        lbl_kstar = ctk.CTkLabel(f_keeper_row, text="Star:", font=ctk.CTkFont(size=11, weight="bold"))
+        lbl_kstar.pack(side="left", padx=(0, 4))
+
+        self.combo_keeper_star = ctk.CTkOptionMenu(
+            f_keeper_row,
+            values=["None", "0 Stars", "1 Star", "2 Stars", "3 Stars", "4 Stars", "5 Stars"],
+            width=105,
+            height=26,
+            dynamic_resizing=False
+        )
+        self.combo_keeper_star.set("None")
+        self.combo_keeper_star.pack(side="left")
+
         # Configurable Actions for Detected Duplicate Items
         f_actions = ctk.CTkFrame(right_panel, corner_radius=6, fg_color="#1a1a1a", border_width=1, border_color="#333333")
-        f_actions.pack(fill="x", pady=(6, 2))
+        f_actions.pack(fill="x", pady=(4, 2))
 
         lbl_act_head = ctk.CTkLabel(
             f_actions,
-            text="⚡ Actions to Apply on Duplicate Items:",
+            text="🗑️ Duplicate Actions (lower quality copies):",
             font=ctk.CTkFont(size=11, weight="bold"),
-            text_color="#ffb703"
+            text_color="#d90429"
         )
         lbl_act_head.pack(anchor="w", padx=10, pady=(6, 4))
 
@@ -306,6 +380,28 @@ class DuplicateScanDialog(ctk.CTkToplevel):
             except Exception:
                 rating_act = None
 
+        keeper_flag = self.combo_keeper_flag.get()
+        keeper_tag = self.chk_keeper_tag_var.get() if self.chk_keeper_tag_var.get() else None
+
+        keeper_star_str = self.combo_keeper_star.get()
+        keeper_rating: Optional[int] = None
+        if keeper_star_str != "None":
+            try:
+                keeper_rating = int(keeper_star_str.split()[0])
+            except Exception:
+                keeper_rating = None
+
+        # Map keeper method display to key
+        method_display = self.combo_keeper_method.get()
+        keeper_method_map = {
+            "Sharpest (Default)": "sharpest",
+            "AI Eye Focus (Bird/Wildlife)": "ai_eye_focus",
+            "Largest File": "largest",
+            "Newest": "newest",
+            "Oldest": "oldest",
+        }
+        keeper_method = keeper_method_map.get(method_display, "sharpest")
+
         try:
             self.grab_release()
         except Exception:
@@ -317,7 +413,7 @@ class DuplicateScanDialog(ctk.CTkToplevel):
             pass
 
         if self.on_run:
-            self.on_run(thresh, self.selected_method, flag_act, tag_act, rating_act)
+            self.on_run(thresh, self.selected_method, flag_act, tag_act, rating_act, keeper_flag, keeper_tag, keeper_rating, keeper_method)
 
         try:
             if self.master:

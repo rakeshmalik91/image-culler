@@ -211,10 +211,10 @@ class TestCullingEngine(unittest.TestCase):
         blur_cfg = get_blur_methods_config()
         dup_cfg = get_duplicate_methods_config()
 
-        self.assertIn("yolo_subject", blur_cfg)
+        self.assertIn("ai_subject", blur_cfg)
         self.assertIn("laplacian", blur_cfg)
         self.assertIn("dhash", dup_cfg)
-        self.assertEqual(len(blur_cfg), 7)
+        self.assertEqual(len(blur_cfg), 3)
         self.assertEqual(len(dup_cfg), 3)
 
     def test_clear_all_metadata(self):

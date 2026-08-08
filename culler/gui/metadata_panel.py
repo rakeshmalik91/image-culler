@@ -1,7 +1,6 @@
 from pathlib import Path
-from typing import Optional, Callable
+from typing import List, Optional, Callable
 import customtkinter as ctk
-from tkinter import simpledialog
 from ..culler_engine import ImageItem, FlagState
 from .tooltip import ToolTip
 
@@ -222,7 +221,7 @@ class MetadataPanel(ctk.CTkFrame):
             self.btn_convert_jpg.pack(fill="x", pady=2)
             ToolTip(self.btn_convert_jpg, "Convert selected photo(s) to JPG (Shortcut: Ctrl+S)")
 
-        # Tags Box (Blur, Duplicate, Dark, Over-exposed, Custom)
+        # Tags Box (Blur, Duplicate, Dark, Over-exposed + Custom from Settings)
         self.tags_box = ctk.CTkFrame(self, fg_color="transparent")
         self.tags_box.pack(side="top", fill="x", padx=10, pady=4)
 
@@ -231,39 +230,10 @@ class MetadataPanel(ctk.CTkFrame):
         )
         self.lbl_tags.pack(anchor="w", pady=(0, 4))
 
-        self.tags_frame1 = ctk.CTkFrame(self.tags_box, fg_color="transparent")
-        self.tags_frame1.pack(fill="x", pady=1)
+        self._tags_container = ctk.CTkFrame(self.tags_box, fg_color="transparent")
+        self._tags_container.pack(fill="x")
 
-        self.tags_frame2 = ctk.CTkFrame(self.tags_box, fg_color="transparent")
-        self.tags_frame2.pack(fill="x", pady=1)
-
-        std_tags = ["Blur", "Duplicate", "Dark", "Over-exposed"]
-        for idx, tag in enumerate(std_tags):
-            target_frame = self.tags_frame1 if idx < 2 else self.tags_frame2
-            btn = ctk.CTkButton(
-                target_frame,
-                text=f"🏷️ {tag}",
-                width=125,
-                height=26,
-                fg_color="#3a3a3a",
-                hover_color="#555555",
-                font=ctk.CTkFont(size=10, weight="bold"),
-                command=lambda t=tag: self._toggle_tag(t)
-            )
-            btn.pack(side="left", padx=2, pady=1)
-            self._tag_buttons[tag] = btn
-
-        self.btn_custom_tag = ctk.CTkButton(
-            self.tags_box,
-            text="+ Custom Tag...",
-            width=260,
-            height=24,
-            fg_color="#1f538d",
-            hover_color="#14375e",
-            font=ctk.CTkFont(size=10, weight="bold"),
-            command=self._add_custom_tag_prompt
-        )
-        self.btn_custom_tag.pack(fill="x", pady=(2, 2))
+        self._build_tag_buttons([])
 
         # Rating Stars Box
         self.rating_box = ctk.CTkFrame(self, fg_color="transparent")
@@ -340,10 +310,44 @@ class MetadataPanel(ctk.CTkFrame):
         if self.on_toggle_tag:
             self.on_toggle_tag(tag_name)
 
-    def _add_custom_tag_prompt(self):
-        val = simpledialog.askstring("Custom Tag", "Enter custom tag name:")
-        if val and val.strip():
-            self._toggle_tag(val.strip())
+    def _build_tag_buttons(self, custom_tags: List[str]):
+        """Build tag toggle buttons for standard + custom tags."""
+        for widget in self._tags_container.winfo_children():
+            widget.destroy()
+        self._tag_buttons.clear()
+
+        all_tags = ["Blur", "Duplicate", "Dark", "Over-exposed"] + list(custom_tags)
+
+        # Layout in rows of 2
+        row_frame = None
+        for idx, tag in enumerate(all_tags):
+            if idx % 2 == 0:
+                row_frame = ctk.CTkFrame(self._tags_container, fg_color="transparent")
+                row_frame.pack(fill="x", pady=1)
+            btn = ctk.CTkButton(
+                row_frame,
+                text=f"🏷️ {tag}",
+                width=125,
+                height=26,
+                fg_color="#3a3a3a",
+                hover_color="#555555",
+                font=ctk.CTkFont(size=10, weight="bold"),
+                command=lambda t=tag: self._toggle_tag(t)
+            )
+            btn.pack(side="left", padx=2, pady=1)
+            self._tag_buttons[tag] = btn
+
+        # Re-highlight if there's a current item
+        if self.current_item:
+            for tag, btn in self._tag_buttons.items():
+                if self.current_item.has_tag(tag):
+                    btn.configure(fg_color="#7b2cbf")
+                else:
+                    btn.configure(fg_color="#3a3a3a")
+
+    def refresh_tag_buttons(self, custom_tags: List[str]):
+        """Refresh tag buttons with updated custom tags from settings."""
+        self._build_tag_buttons(custom_tags)
 
     def update_item_metadata(self, item: Optional[ImageItem]):
         self.current_item = item

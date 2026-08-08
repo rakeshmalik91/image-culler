@@ -1,4 +1,4 @@
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 import customtkinter as ctk
 
 from ..db_manager import DatabaseManager
@@ -6,9 +6,9 @@ from ..db_manager import DatabaseManager
 
 class SettingsDialog(ctk.CTkToplevel):
     """
-    Unified Application Settings Modal Window.
-    Consolidates Output Folder Settings (Picked/Rejected), RAW Load Scale,
-    White Balance Mode, and RAW+JPG Stacking into a single clean modal interface.
+    Unified Application Settings Modal Window with Tabbed Interface.
+    Tab 1 (General): Output Folder Settings, RAW Load Scale, White Balance, Stacking, Tools.
+    Tab 2 (Tags): Manage custom image tags.
     """
 
     def __init__(
@@ -28,7 +28,7 @@ class SettingsDialog(ctk.CTkToplevel):
         self.on_sync_exif = on_sync_exif
 
         self.title("⚙️ Application Settings")
-        self.geometry("470x520")
+        self.geometry("520x560")
         self.resizable(False, False)
 
         # Make modal dialog window
@@ -62,11 +62,46 @@ class SettingsDialog(ctk.CTkToplevel):
             text="⚙️ Global Application Settings",
             font=ctk.CTkFont(size=16, weight="bold")
         )
-        lbl_title.pack(side="top", pady=(15, 10))
+        lbl_title.pack(side="top", pady=(15, 5))
 
-        # Main scrollable container
-        container = ctk.CTkFrame(self, fg_color="transparent")
-        container.pack(side="top", fill="both", expand=True, padx=20, pady=5)
+        # Tabview
+        self.tabview = ctk.CTkTabview(self, width=480, height=410)
+        self.tabview.pack(side="top", fill="both", expand=True, padx=15, pady=5)
+
+        self.tabview.add("General")
+        self.tabview.add("Tags")
+
+        self._build_general_tab(self.tabview.tab("General"))
+        self._build_tags_tab(self.tabview.tab("Tags"))
+
+        # Bottom Button Bar
+        btn_bar = ctk.CTkFrame(self, fg_color="transparent")
+        btn_bar.pack(side="bottom", fill="x", padx=20, pady=15)
+
+        btn_cancel = ctk.CTkButton(
+            btn_bar,
+            text="Cancel",
+            width=90,
+            fg_color="#4a4e69",
+            hover_color="#22223b",
+            command=self.destroy
+        )
+        btn_cancel.pack(side="right", padx=4)
+
+        btn_save = ctk.CTkButton(
+            btn_bar,
+            text="💾 Save Settings",
+            width=120,
+            fg_color="#2b9348",
+            hover_color="#1b4332",
+            font=ctk.CTkFont(weight="bold"),
+            command=self._save_settings
+        )
+        btn_save.pack(side="right", padx=4)
+
+    def _build_general_tab(self, tab):
+        container = ctk.CTkFrame(tab, fg_color="transparent")
+        container.pack(side="top", fill="both", expand=True, padx=5, pady=5)
 
         # ----------------------------------------------------
         # Section 1: Output Destination Subfolders
@@ -228,30 +263,146 @@ class SettingsDialog(ctk.CTkToplevel):
             )
             btn_sync.pack(side="left", padx=2)
 
-        # Bottom Button Bar
-        btn_bar = ctk.CTkFrame(self, fg_color="transparent")
-        btn_bar.pack(side="bottom", fill="x", padx=20, pady=15)
+    def _build_tags_tab(self, tab):
+        container = ctk.CTkFrame(tab, fg_color="transparent")
+        container.pack(side="top", fill="both", expand=True, padx=5, pady=5)
 
-        btn_cancel = ctk.CTkButton(
-            btn_bar,
-            text="Cancel",
-            width=90,
-            fg_color="#4a4e69",
-            hover_color="#22223b",
-            command=self.destroy
+        lbl_head = ctk.CTkLabel(
+            container,
+            text="🏷️ Manage Image Tags",
+            font=ctk.CTkFont(size=12, weight="bold")
         )
-        btn_cancel.pack(side="right", padx=4)
+        lbl_head.pack(anchor="w", pady=(5, 4))
 
-        btn_save = ctk.CTkButton(
-            btn_bar,
-            text="💾 Save Settings",
-            width=120,
+        lbl_desc = ctk.CTkLabel(
+            container,
+            text="Standard tags (Blur, Duplicate, Dark, Over-exposed) are built-in.\nAdd your own custom tags below.",
+            font=ctk.CTkFont(size=11),
+            text_color="#aaaaaa",
+            justify="left"
+        )
+        lbl_desc.pack(anchor="w", pady=(0, 8))
+
+        # Standard tags (read-only display)
+        f_std = ctk.CTkFrame(container, corner_radius=6, fg_color="#1a1a1a", border_width=1, border_color="#333333")
+        f_std.pack(fill="x", pady=(0, 8))
+
+        lbl_std = ctk.CTkLabel(
+            f_std,
+            text="Built-in Tags:",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#888888"
+        )
+        lbl_std.pack(anchor="w", padx=10, pady=(6, 4))
+
+        f_std_tags = ctk.CTkFrame(f_std, fg_color="transparent")
+        f_std_tags.pack(fill="x", padx=10, pady=(0, 6))
+        for tag in ["Blur", "Duplicate", "Dark", "Over-exposed"]:
+            lbl = ctk.CTkLabel(
+                f_std_tags,
+                text=f"🏷️ {tag}",
+                font=ctk.CTkFont(size=10, weight="bold"),
+                fg_color="#3a3a3a",
+                corner_radius=4,
+                width=100,
+                height=24
+            )
+            lbl.pack(side="left", padx=2)
+
+        # Custom tags section
+        f_custom = ctk.CTkFrame(container, corner_radius=6, fg_color="#1a1a1a", border_width=1, border_color="#2b9348")
+        f_custom.pack(fill="both", expand=True, pady=(0, 4))
+
+        lbl_custom = ctk.CTkLabel(
+            f_custom,
+            text="Custom Tags:",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#2b9348"
+        )
+        lbl_custom.pack(anchor="w", padx=10, pady=(6, 4))
+
+        # Tag list scrollable frame
+        self.custom_tags_frame = ctk.CTkScrollableFrame(f_custom, fg_color="transparent", height=120)
+        self.custom_tags_frame.pack(fill="both", expand=True, padx=10, pady=(0, 4))
+
+        # Add tag row
+        f_add = ctk.CTkFrame(f_custom, fg_color="transparent")
+        f_add.pack(fill="x", padx=10, pady=(0, 8))
+
+        self.entry_new_tag = ctk.CTkEntry(f_add, placeholder_text="Enter new tag name...")
+        self.entry_new_tag.pack(side="left", fill="x", expand=True, padx=(0, 4))
+
+        btn_add = ctk.CTkButton(
+            f_add,
+            text="+ Add Tag",
+            width=90,
+            height=28,
             fg_color="#2b9348",
             hover_color="#1b4332",
-            font=ctk.CTkFont(weight="bold"),
-            command=self._save_settings
+            font=ctk.CTkFont(size=11, weight="bold"),
+            command=self._add_custom_tag
         )
-        btn_save.pack(side="right", padx=4)
+        btn_add.pack(side="right")
+
+        # Load existing custom tags
+        self._custom_tags: List[str] = self.db.get_custom_tags()
+        self._refresh_custom_tags_list()
+
+    def _refresh_custom_tags_list(self):
+        """Rebuild the custom tags list in the Tags tab."""
+        for widget in self.custom_tags_frame.winfo_children():
+            widget.destroy()
+
+        if not self._custom_tags:
+            lbl_empty = ctk.CTkLabel(
+                self.custom_tags_frame,
+                text="No custom tags defined yet.",
+                font=ctk.CTkFont(size=11),
+                text_color="#666666"
+            )
+            lbl_empty.pack(anchor="w", pady=4)
+            return
+
+        for tag in self._custom_tags:
+            f_row = ctk.CTkFrame(self.custom_tags_frame, fg_color="transparent")
+            f_row.pack(fill="x", pady=1)
+
+            lbl = ctk.CTkLabel(
+                f_row,
+                text=f"🏷️ {tag}",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                anchor="w"
+            )
+            lbl.pack(side="left", padx=(0, 8))
+
+            btn_del = ctk.CTkButton(
+                f_row,
+                text="✕",
+                width=28,
+                height=22,
+                fg_color="#d90429",
+                hover_color="#a4031f",
+                font=ctk.CTkFont(size=10, weight="bold"),
+                command=lambda t=tag: self._remove_custom_tag(t)
+            )
+            btn_del.pack(side="right")
+
+    def _add_custom_tag(self):
+        val = self.entry_new_tag.get().strip()
+        if not val:
+            return
+        # Don't allow duplicates or built-in tag names
+        builtin = {"blur", "duplicate", "dark", "over-exposed"}
+        if val.lower() in builtin or val in self._custom_tags:
+            return
+        self._custom_tags.append(val)
+        self.entry_new_tag.delete(0, "end")
+        self._refresh_custom_tags_list()
+
+    def _remove_custom_tag(self, tag: str):
+        if tag in self._custom_tags:
+            self._custom_tags.remove(tag)
+            self._refresh_custom_tags_list()
 
     def _save_settings(self):
         # 1. Output destination subfolders
@@ -278,6 +429,9 @@ class SettingsDialog(ctk.CTkToplevel):
 
         # 4. Stack RAW+JPG
         self.db.set_stack_raw_jpg(bool(self.chk_stack.get()))
+
+        # 5. Custom tags
+        self.db.set_custom_tags(self._custom_tags)
 
         if self.on_save:
             self.on_save()

@@ -1,31 +1,22 @@
 {
   "blur_methods": {
-    "yolo_subject": {
-      "title": "AI YOLO Subject & Eye Focus (Bird/Animal)",
+    "laplacian": {
+      "title": "Variance of Laplacian (Default / Fast)",
+      "speed": "⚡ Speed: ⭐⭐⭐⭐⭐ (< 3ms / image)",
+      "how_it_works": "🔬 How It Works: Applies a 2D Laplacian operator (∇²I) over the grayscale luminance channel to measure edge second-derivatives. Sharp images contain steep intensity transitions (high variance), while blurry images produce smooth gradients (low variance).",
+      "detects": "🎯 Detects: General defocus blur & soft edge variance across the whole photo.",
+      "pros": "✅ Pros: Ultra-fast execution, extremely low CPU memory footprint, ideal for rapid first-pass culling across thousands of photos.",
+      "cons": "⚠️ Cons: Can mistake flat low-texture scenes (flat sky, plain walls) or intentional background bokeh for blur.",
+      "best_for": "💡 Best For: General photography, landscape, studio, and rapid batch filtering."
+    },
+    "ai_subject": {
+      "title": "AI Subject Focus (YOLO + ROI + Patch Grid)",
       "speed": "⚡ Speed: ⭐⭐⭐ (~25ms / image)",
-      "how_it_works": "🔬 How It Works: Hybrid AI Engine combining YOLOv8 subject detection, Multi-Layer Head/Eye Zone cropping, 4x4 Specular Catchlight Micro-Grid Variance, and 8x8 Local Patch Grid Bokeh Protection. Measures focus exclusively on sharp subject details (eyes, catchlights, beak, face).",
-      "detects": "🎯 Detects: Hybrid AI subject bounding box + 95th percentile eye pupil, catchlight specular reflection, and beak micro-texture focus.",
-      "pros": "✅ Pros: 100% automated AI subject localization with Bokeh Protection. Completely immune to smooth background blur; pin-sharp bird & wildlife eyes/head portraits score exceptionally high.",
-      "cons": "⚠️ Cons: Slightly higher per-photo inference time (~25ms / photo).",
-      "best_for": "💡 Best For: Birding, wildlife action, shallow depth-of-field portraits, off-center subjects, and heavy background bokeh."
-    },
-    "bird_subject": {
-      "title": "Bird & Wildlife Subject ROI (Center Focus)",
-      "speed": "⚡ Speed: ⭐⭐⭐⭐ (~10ms / image)",
-      "how_it_works": "🔬 How It Works: Crops a central 60% Region of Interest (ROI) box ([y1:y2, x1:x2]) where subjects are centered. Computes a weighted combination of Laplacian variance (60%) and Tenengrad gradient energy (40%) on the crop.",
-      "detects": "🎯 Detects: Subject focus in central crop (completely ignoring background bokeh/sky/trees).",
-      "pros": "✅ Pros: Perfect for bird & wildlife photography. Prevents beautiful soft background bokeh or detailed trees/foliage from skewing bird focus scoring.",
-      "cons": "⚠️ Cons: Assumes subject is positioned within the central 60% region of the frame.",
-      "best_for": "💡 Best For: Bird photography, wildlife, sports, and centered subject action shots."
-    },
-    "local_var": {
-      "title": "Local Patch Variance (Bokeh Protection)",
-      "speed": "⚡ Speed: ⭐⭐⭐⭐ (~12ms / image)",
-      "how_it_works": "🔬 How It Works: Divides image into a 10x10 grid of local patches. Computes variance per patch and takes the 90th percentile score, ensuring localized subject sharpness is rewarded even if background is blurred.",
-      "detects": "🎯 Detects: Localized patch texture variance vs global defocus blur.",
-      "pros": "✅ Pros: Distinguishes intentional shallow depth-of-field (portrait bokeh) from actual subject blur.",
-      "cons": "⚠️ Cons: May rank uniform background regions lower if subject is small or off-center.",
-      "best_for": "💡 Best For: Shallow depth-of-field portraits, bokeh photos, and macro shots."
+      "how_it_works": "🔬 How It Works: Runs YOLOv8 AI object detection to locate the main subject bounding box, then evaluates 3 crop layers (Full Subject, Head & Eye Zone, Subject Core) using 95th percentile Laplacian + Sobel gradient energy. Includes an 8x8 patch grid bokeh protection engine. Falls back to center-60% ROI crop when no AI detection is available.",
+      "detects": "🎯 Detects: Subject-aware focus sharpness — eyes, head, beak, and facial details within AI-detected bounding boxes.",
+      "pros": "✅ Pros: 100% automated AI subject localization with bokeh immunity. Completely ignores smooth background blur; rewards pin-sharp bird & wildlife eyes/head/beak details. Absorbs center-ROI and patch variance methods as internal fallback layers.",
+      "cons": "⚠️ Cons: Slightly higher per-photo inference time (~25ms). Requires YOLO model download on first use.",
+      "best_for": "💡 Best For: Birding, wildlife, shallow depth-of-field portraits, off-center subjects, macro, and heavy background bokeh."
     },
     "fft": {
       "title": "FFT Frequency Analysis (Motion Blur)",
@@ -35,33 +26,6 @@
       "pros": "✅ Pros: Excellent at detecting directional motion blur, hand-shake, and subject movement that edge operators miss.",
       "cons": "⚠️ Cons: Higher computational cost due to 2D Fast Fourier Transforms.",
       "best_for": "💡 Best For: Action shots, handheld low-light photos, and camera shake detection."
-    },
-    "brenner": {
-      "title": "Brenner Focus Measure",
-      "speed": "⚡ Speed: ⭐⭐⭐⭐⭐ (~4ms / image)",
-      "how_it_works": "🔬 How It Works: Computes squared intensity differences between pixels separated by a fixed distance d=2: mean((I(x+2,y) - I(x,y)²). Focus accuracy correlates directly with high pixel-to-pixel contrast.",
-      "detects": "🎯 Detects: High-frequency pixel intensity differences & autofocus accuracy.",
-      "pros": "✅ Pros: Extremely fast focus measure algorithm, excellent for detecting autofocus errors.",
-      "cons": "⚠️ Cons: Sensitive to high-frequency image noise or ISO grain in low-light photos.",
-      "best_for": "💡 Best For: Autofocus verification, sharp subject checks, and sports culling."
-    },
-    "tenengrad": {
-      "title": "Tenengrad (Sobel Gradient Energy)",
-      "speed": "⚡ Speed: ⭐⭐⭐⭐ (~8ms / image)",
-      "how_it_works": "🔬 How It Works: Computes horizontal (Gx) and vertical (Gy) Sobel gradient vectors across the image. Calculates the mean squared gradient magnitude (Gx² + Gy²). Sharp structural edges yield high gradient energy.",
-      "detects": "🎯 Detects: Fine edge gradient sharpness, micro-details & high-contrast boundaries.",
-      "pros": "✅ Pros: Highly stable mathematical measure, superior for natural photos, macro textures, and less sensitive to high-frequency ISO noise spikes.",
-      "cons": "⚠️ Cons: Slightly higher CPU calculation cost than simple Laplacian variance.",
-      "best_for": "💡 Best For: Outdoor nature, architecture, macro textures, and scientific imaging."
-    },
-    "laplacian": {
-      "title": "Variance of Laplacian (Default / Fast)",
-      "speed": "⚡ Speed: ⭐⭐⭐⭐⭐ (< 3ms / image)",
-      "how_it_works": "🔬 How It Works: Applies a 2D Laplacian operator (∇²I) over the grayscale luminance channel to measure edge second-derivatives. Sharp images contain steep intensity transitions (high variance), while blurry images produce smooth gradients (low variance).",
-      "detects": "🎯 Detects: General defocus blur & soft edge variance across the whole photo.",
-      "pros": "✅ Pros: Ultra-fast execution, extremely low CPU memory footprint, ideal for rapid first-pass culling across thousands of photos.",
-      "cons": "⚠️ Cons: Can mistake flat low-texture scenes (flat sky, plain walls) or intentional background bokeh for blur.",
-      "best_for": "💡 Best For: General photography, landscape, studio, and rapid batch filtering."
     }
   },
   "duplicate_methods": {

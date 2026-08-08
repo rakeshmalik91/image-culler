@@ -8,10 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from culler.detectors.blur import (
     calculate_sharpness,
     compute_laplacian_sharpness,
-    compute_tenengrad_sharpness,
-    compute_brenner_sharpness,
     compute_fft_sharpness,
-    compute_local_var_sharpness,
     compute_bird_subject_sharpness
 )
 
@@ -39,13 +36,22 @@ class TestBlurDetector(unittest.TestCase):
         """
         Verify that all blur algorithms assign significantly higher scores to high-contrast sharp images than blurry ones.
         """
-        methods = ["laplacian", "tenengrad", "brenner", "fft", "local_var", "bird_subject", "yolo_subject"]
+        methods = ["laplacian", "ai_subject", "fft"]
 
         for method in methods:
             sharp_score = calculate_sharpness(self.sharp_img, method=method)
             blurry_score = calculate_sharpness(self.blurry_img, method=method)
 
             self.assertGreater(sharp_score, blurry_score, f"Algorithm '{method}' failed to rank sharp image higher!")
+
+    def test_backward_compat_aliases(self):
+        """
+        Verify that old method names still work via backward-compat aliases.
+        """
+        old_methods = ["tenengrad", "brenner", "local_var", "bird_subject", "yolo_subject"]
+        for method in old_methods:
+            score = calculate_sharpness(self.sharp_img, method=method)
+            self.assertGreater(score, 0.0, f"Backward-compat alias '{method}' returned 0!")
 
     def test_invalid_or_none_image_handling(self):
         """

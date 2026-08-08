@@ -1,13 +1,178 @@
-from typing import Callable, Dict, Any, Optional
+from typing import Callable, Dict, Any, List, Optional
 import customtkinter as ctk
 from .tooltip import ToolTip
+
+
+class MultiSelectDropdown(ctk.CTkFrame):
+    """
+    Custom multiselect dropdown widget.
+    Shows a button that opens a popup with checkboxes.
+    Button text dynamically reflects selected items.
+    """
+    _active_instance = None
+
+    def __init__(
+        self,
+        master,
+        values: List[str],
+        all_label: str = "All",
+        width: int = 95,
+        on_change: Optional[Callable[[], None]] = None,
+        **kwargs
+    ):
+        super().__init__(master, fg_color="transparent", **kwargs)
+        self.all_label = all_label
+        self.values = values
+        self.on_change = on_change
+        self._selected: set = set()  # Empty means "All"
+        self._popup = None
+
+        self.btn = ctk.CTkButton(
+            self,
+            text=all_label,
+            width=width,
+            height=28,
+            fg_color="#3a3a3a",
+            hover_color="#555555",
+            font=ctk.CTkFont(size=11),
+            command=self._toggle_popup,
+            anchor="w"
+        )
+        self.btn.pack(fill="x")
+
+    def _toggle_popup(self):
+        if self._popup and self._popup.winfo_exists():
+            self.close_popup()
+            return
+
+        if MultiSelectDropdown._active_instance and MultiSelectDropdown._active_instance != self:
+            MultiSelectDropdown._active_instance.close_popup()
+
+        self._popup = ctk.CTkToplevel(self)
+        self._popup.overrideredirect(True)
+        self._popup.attributes("-topmost", True)
+        MultiSelectDropdown._active_instance = self
+
+        # Position below the button
+        x = self.btn.winfo_rootx()
+        y = self.btn.winfo_rooty() + self.btn.winfo_height() + 2
+        self._popup.geometry(f"+{x}+{y}")
+
+        popup_frame = ctk.CTkFrame(self._popup, corner_radius=6, fg_color="#2a2a2a", border_width=1, border_color="#555555")
+        popup_frame.pack(fill="both", expand=True, padx=0, pady=0)
+
+        self._chk_vars: Dict[str, ctk.BooleanVar] = {}
+        for val in self.values:
+            var = ctk.BooleanVar(value=(val in self._selected))
+            chk = ctk.CTkCheckBox(
+                popup_frame,
+                text=val,
+                variable=var,
+                font=ctk.CTkFont(size=11),
+                checkbox_width=16,
+                checkbox_height=16,
+                command=lambda v=val, bv=var: self._on_check(v, bv)
+            )
+            chk.pack(anchor="w", padx=8, pady=2)
+            self._chk_vars[val] = var
+
+        self._popup.update_idletasks()
+
+        # Bind click outside and Escape key globally on root
+        root = self.winfo_toplevel()
+        if not getattr(root, "_multiselect_bound", False):
+            root.bind_all("<ButtonPress-1>", MultiSelectDropdown._global_on_click, add="+")
+            root.bind_all("<Escape>", MultiSelectDropdown._global_on_escape, add="+")
+            root._multiselect_bound = True
+
+    @classmethod
+    def _global_on_escape(cls, event):
+        if cls._active_instance:
+            cls._active_instance.close_popup()
+
+    @classmethod
+    def _global_on_click(cls, event):
+        if not cls._active_instance or not cls._active_instance._popup:
+            return
+        inst = cls._active_instance
+        if not inst._popup.winfo_exists():
+            cls._active_instance = None
+            return
+
+        try:
+            px = inst._popup.winfo_rootx()
+            py = inst._popup.winfo_rooty()
+            pw = inst._popup.winfo_width()
+            ph = inst._popup.winfo_height()
+
+            bx = inst.btn.winfo_rootx()
+            by = inst.btn.winfo_rooty()
+            bw = inst.btn.winfo_width()
+            bh = inst.btn.winfo_height()
+
+            rx = event.x_root
+            ry = event.y_root
+
+            inside_popup = (px <= rx <= px + pw) and (py <= ry <= py + ph)
+            inside_btn = (bx <= rx <= bx + bw) and (by <= ry <= by + bh)
+
+            if not inside_popup and not inside_btn:
+                inst.close_popup()
+        except Exception:
+            pass
+
+    def _on_check(self, value: str, var: ctk.BooleanVar):
+        if var.get():
+            self._selected.add(value)
+        else:
+            self._selected.discard(value)
+        self._update_label()
+        if self.on_change:
+            self.on_change()
+
+    def close_popup(self):
+        if self._popup:
+            try:
+                if self._popup.winfo_exists():
+                    self._popup.destroy()
+            except Exception:
+                pass
+            self._popup = None
+        if MultiSelectDropdown._active_instance == self:
+            MultiSelectDropdown._active_instance = None
+
+    def _update_label(self):
+        if not self._selected:
+            self.btn.configure(text=self.all_label)
+        elif len(self._selected) == 1:
+            self.btn.configure(text=next(iter(self._selected)))
+        elif len(self._selected) <= 2:
+            self.btn.configure(text=", ".join(sorted(self._selected)))
+        else:
+            self.btn.configure(text=f"{len(self._selected)} selected")
+
+    def get_selected(self) -> List[str]:
+        """Return list of selected values, or empty list for 'All'."""
+        return sorted(self._selected) if self._selected else []
+
+    def set_values(self, values: List[str]):
+        """Update available values, preserving current selection where possible."""
+        self.values = values
+        # Remove any selected items no longer in values
+        self._selected = self._selected.intersection(set(values))
+        self._update_label()
+
+    def reset(self):
+        """Reset to 'All' state."""
+        self._selected.clear()
+        self._update_label()
 
 
 class HeaderToolbar(ctk.CTkFrame):
     """
     Top Navigation and Action Toolbar containing:
     - Open Directory button
-    - Filter controls (Segmented flag filter, rating filter, format filter)
+    - Filter controls (Segmented flag filter, multiselect rating filter, format filter, multiselect tag filter)
     - RAW scale preview selector (10%, 15%, 20%, 25%, 50%, 100%)
     - White balance mode selector (Camera vs Auto)
     - 100% full-resolution preview button
@@ -84,15 +249,16 @@ class HeaderToolbar(ctk.CTkFrame):
         self.seg_filter.set("All")
         self.seg_filter.pack(side="left", padx=3)
 
-        # Rating Filter
-        self.opt_rating = ctk.CTkOptionMenu(
+        # Rating Filter (MultiSelect)
+        self.rating_filter = MultiSelectDropdown(
             self,
-            values=["All Stars", "★ 1+", "★ 2+", "★ 3+", "★ 4+", "★ 5"],
-            command=lambda v: self.on_filter_change("filter"),
-            width=90
+            values=["★ 1", "★ 2", "★ 3", "★ 4", "★ 5", "Unrated"],
+            all_label="All Stars",
+            width=90,
+            on_change=lambda: self.on_filter_change("filter")
         )
-        self.opt_rating.set("All Stars")
-        self.opt_rating.pack(side="left", padx=3)
+        self.rating_filter.pack(side="left", padx=3)
+        ToolTip(self.rating_filter, "Filter by Star Rating (multi-select, OR logic)")
 
         # Format Filter
         self.opt_format = ctk.CTkOptionMenu(
@@ -104,16 +270,16 @@ class HeaderToolbar(ctk.CTkFrame):
         self.opt_format.set("All Formats")
         self.opt_format.pack(side="left", padx=3)
 
-        # Tag Filter
-        self.opt_tag = ctk.CTkOptionMenu(
+        # Tag Filter (MultiSelect)
+        self.tag_filter = MultiSelectDropdown(
             self,
-            values=["All Tags", "Blur", "Duplicate", "Dark", "Over-exposed"],
-            command=lambda v: self.on_filter_change("filter"),
-            width=95
+            values=["Blur", "Duplicate", "Dark", "Over-exposed"],
+            all_label="All Tags",
+            width=95,
+            on_change=lambda: self.on_filter_change("filter")
         )
-        self.opt_tag.set("All Tags")
-        self.opt_tag.pack(side="left", padx=3)
-        ToolTip(self.opt_tag, "Filter by Tag (Blur, Duplicate, Dark, Over-exposed, or custom tags)")
+        self.tag_filter.pack(side="left", padx=3)
+        ToolTip(self.tag_filter, "Filter by Tag (multi-select, OR logic)")
 
         # 100% Full Resolution Button
         self.btn_100 = ctk.CTkButton(
@@ -211,23 +377,18 @@ class HeaderToolbar(ctk.CTkFrame):
     def get_filter_values(self) -> Dict[str, Any]:
         return {
             "flag": self.seg_filter.get(),
-            "rating": self.opt_rating.get(),
+            "rating": self.rating_filter.get_selected(),
             "format": self.opt_format.get(),
-            "tag": self.opt_tag.get()
+            "tag": self.tag_filter.get_selected()
         }
 
     def update_tag_options(self, available_tags: list):
         """Dynamically update the Tag Filter dropdown choices based on tags present in session."""
-        base_tags = ["All Tags", "Blur", "Duplicate", "Dark", "Over-exposed"]
+        base_tags = ["Blur", "Duplicate", "Dark", "Over-exposed"]
         for t in available_tags:
             if t and t not in base_tags:
                 base_tags.append(t)
-        cur = self.opt_tag.get()
-        self.opt_tag.configure(values=base_tags)
-        if cur in base_tags:
-            self.opt_tag.set(cur)
-        else:
-            self.opt_tag.set("All Tags")
+        self.tag_filter.set_values(base_tags)
 
     def get_format_filter(self) -> str:
         return self.opt_format.get()

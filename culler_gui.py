@@ -119,6 +119,7 @@ class ImageCullerApp(ctk.CTk):
             initial_rejected_folder=init_rejected_folder
         )
         self.meta_panel.pack(side="right", fill="y", padx=3, pady=3)
+        self.meta_panel.refresh_tag_buttons(self.db.get_custom_tags())
 
         # Status Bar
         self.status_bar = ctk.CTkFrame(self, height=30, corner_radius=0)
@@ -315,13 +316,19 @@ class ImageCullerApp(ctk.CTk):
     def _on_filter_changed(self, trigger_source: str = "filter"):
         filter_vals = self.toolbar.get_filter_values()
 
-        rating_val = 0
-        r_str = filter_vals["rating"]
-        if "1+" in r_str: rating_val = 1
-        elif "2+" in r_str: rating_val = 2
-        elif "3+" in r_str: rating_val = 3
-        elif "4+" in r_str: rating_val = 4
-        elif "5" in r_str: rating_val = 5
+        # Rating filter: list of selected rating labels (e.g. ["★ 3", "★ 5", "Unrated"]) -> set of ints or None
+        rating_selected = filter_vals["rating"]  # List[str] or empty for "All"
+        rating_filter_set = None
+        if rating_selected:
+            rating_filter_set = set()
+            for r_str in rating_selected:
+                if r_str == "Unrated":
+                    rating_filter_set.add(0)
+                else:
+                    try:
+                        rating_filter_set.add(int(r_str.replace("★", "").strip()))
+                    except Exception:
+                        pass
 
         fmt_val = filter_vals["format"]
         if ".ARW" in fmt_val.upper() or "ARW" in fmt_val.upper(): fmt_val = ".ARW"
@@ -330,9 +337,9 @@ class ImageCullerApp(ctk.CTk):
         elif ".HEIC" in fmt_val.upper() or "HEIC" in fmt_val.upper(): fmt_val = ".HEIC"
         else: fmt_val = "All"
 
-        tag_val = filter_vals.get("tag", "All Tags")
-        if "All Tags" in tag_val or "ALL" in tag_val.upper():
-            tag_val = None
+        # Tag filter: list of selected tags or empty for "All" (OR logic)
+        tag_selected = filter_vals.get("tag", [])  # List[str]
+        tag_filter = tag_selected if tag_selected else None
 
         # Preserve active photo path across filter changes if present in newly filtered list
         prev_selected_path = None
@@ -341,9 +348,9 @@ class ImageCullerApp(ctk.CTk):
 
         self.current_items = self.session.get_filtered_items(
             flag_filter=filter_vals["flag"],
-            rating_filter=rating_val,
+            rating_filter=rating_filter_set,
             format_filter=fmt_val,
-            tag_filter=tag_val
+            tag_filter=tag_filter
         )
 
         target_idx = 0
@@ -353,7 +360,7 @@ class ImageCullerApp(ctk.CTk):
                     target_idx = idx
                     break
 
-        log_info(f"_on_filter_changed: filter='{filter_vals['flag']}', rating={rating_val}, format='{fmt_val}', tag='{tag_val}' -> {len(self.current_items)} items matched")
+        log_info(f"_on_filter_changed: filter='{filter_vals['flag']}', rating={rating_filter_set}, format='{fmt_val}', tag='{tag_filter}' -> {len(self.current_items)} items matched")
 
         white_balance = self.toolbar.get_white_balance()
 
@@ -836,7 +843,11 @@ class ImageCullerApp(ctk.CTk):
         method: str,
         flag_action: str = "Reject",
         tag_action: Optional[str] = "Duplicate",
-        rating_action: Optional[int] = None
+        rating_action: Optional[int] = None,
+        keeper_flag: str = "Pick",
+        keeper_tag: Optional[str] = None,
+        keeper_rating: Optional[int] = None,
+        keeper_method: str = "sharpest"
     ):
         self.db.set_duplicate_method(method)
         self.db.set_duplicate_threshold(threshold)
@@ -863,6 +874,10 @@ class ImageCullerApp(ctk.CTk):
                 flag_action=flag_action,
                 tag_action=tag_action,
                 rating_action=rating_action,
+                keeper_flag=keeper_flag,
+                keeper_tag=keeper_tag,
+                keeper_rating=keeper_rating,
+                keeper_method=keeper_method,
                 progress_callback=progress_cb
             )
             self.after(0, lambda: self._on_scan_dups_complete(len(flagged), prog_dialog))
@@ -1250,6 +1265,11 @@ class ImageCullerApp(ctk.CTk):
         self.toolbar.opt_wb.set("Camera" if wb_val == "camera" else "Auto")
 
         self._update_status(f"Settings saved. Picked: '{new_p}', Rejected: '{new_r}', RAW Scale: {sc_str}")
+
+        # Refresh custom tags in metadata panel and toolbar filter
+        custom_tags = self.db.get_custom_tags()
+        self.meta_panel.refresh_tag_buttons(custom_tags)
+        self.toolbar.update_tag_options(custom_tags)
 
         if self.session.directory:
             self._load_directory(str(self.session.directory))

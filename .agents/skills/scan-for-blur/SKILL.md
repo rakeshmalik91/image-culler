@@ -5,11 +5,11 @@ description: Technical approach for automated edge sharpness detection, blur sca
 
 # Scan for Blur (Blur Detection & Tagging Pipeline)
 
-This skill documents all 7 algorithms for detecting out-of-focus or blurry photos during photographic culling sessions, auto-flagging them as `REJECT`, and applying the `"Blur"` tag.
+This skill documents all 3 algorithms for detecting out-of-focus or blurry photos during photographic culling sessions, auto-flagging them as `REJECT`, and applying the `"Blur"` tag.
 
 ---
 
-## 🔬 All 7 Implemented Blur Detection Algorithms
+## 🔬 3 Blur Detection Algorithms
 
 Photographers can select their preferred algorithm from a 2-column sidebar modal (`BlurScanDialog`):
 
@@ -22,26 +22,29 @@ $$\text{Sharpness Score} = \text{Var}(\nabla^2 I)$$
 
 ---
 
-### 2. Tenengrad Sobel Gradient (`"tenengrad"`) - Stable Gradient Energy
-Uses Sobel horizontal ($G_x$) and vertical ($G_y$) gradients to measure gradient magnitude energy:
-$$G_x = \text{Sobel}(I, \text{CV\_64F}, 1, 0, k=3), \quad G_y = \text{Sobel}(I, \text{CV\_64F}, 0, 1, k=3)$$
-$$\text{Tenengrad Score} = \text{mean}(G_x^2 + G_y^2)$$
-- **Speed**: ⭐⭐⭐⭐ (~8ms / image)
-- **Detects**: Fine edge gradient sharpness and structural detail.
-- **Best For**: Scientific imaging, macro photography, complex natural textures.
+### 2. AI Subject Focus (`"ai_subject"`) - YOLO + ROI + Patch Grid
+Unified intelligent algorithm combining YOLOv8 AI detection, center-ROI fallback, and patch grid bokeh protection.
+
+- **Algorithm**:
+  1. Run YOLOv8 object detection (`yolov8n.pt`) to find the highest-confidence subject bounding box.
+  2. Evaluate 3 crop layers within the detection box:
+     - **Full Subject Crop** (10% inset to eliminate edge background pixels)
+     - **Head & Eye Zone** (top 40% of bounding box — where bird/animal eyes are located)
+     - **Subject Core** (central 60% of bounding box)
+  3. Score each layer using 95th percentile Laplacian + Sobel gradient energy:
+     $$\text{Region Score} = p_{95}(\nabla^2 I) \times 3.0 + p_{95}(\sqrt{G_x^2 + G_y^2}) \times 0.5$$
+  4. Combine using weighted blend: $\text{best} \times 0.7 + \text{median} \times 0.3$
+  5. Also compute 8x8 patch grid Laplacian variance (90th percentile) for bokeh protection.
+  6. Falls back to center-60% ROI crop if no YOLO detection is available.
+
+- **Speed**: ⭐⭐⭐ (~25ms / image)
+- **Detects**: Subject-aware focus sharpness — eyes, head, beak, and facial details.
+- **Best For**: Birding, wildlife, shallow depth-of-field portraits, off-center subjects, macro, and heavy background bokeh.
+- **Backward Compat**: Old method names `"yolo_subject"`, `"bird_subject"`, `"local_var"` all redirect here.
 
 ---
 
-### 3. Brenner Focus Measure (`"brenner"`) - Focus Difference
-Computes squared intensity differences between pixels a fixed distance ($d=2$) apart:
-$$\text{Brenner Score} = \text{mean}((I(x+2, y) - I(x, y))^2)$$
-- **Speed**: ⭐⭐⭐⭐⭐ (~4ms / image)
-- **Detects**: High-frequency pixel intensity differences & autofocus accuracy.
-- **Best For**: Autofocus verification, sharp subject checks, and sports culling.
-
----
-
-### 4. FFT Frequency Analysis (`"fft"`) - Motion Blur Detection
+### 3. FFT Frequency Analysis (`"fft"`) - Motion Blur Detection
 Performs a 2D Fast Fourier Transform, masks out central low-frequency components, and calculates high-frequency energy ratio:
 $$\text{FFT Score} = \text{mean}(|\text{FFTshift}(\mathcal{F}(I))|_{\text{high\_freq}})$$
 - **Speed**: ⭐⭐⭐ (~18ms / image)
@@ -50,39 +53,16 @@ $$\text{FFT Score} = \text{mean}(|\text{FFTshift}(\mathcal{F}(I))|_{\text{high\_
 
 ---
 
-### 5. Local Patch Variance (`"local_var"`) - Texture vs Bokeh
-Divides the image into a grid of local patches, computes variance per patch, and takes the 90th percentile:
-$$\text{Local Var Score} = \text{Percentile}_{90}(\{\text{Var}(P_k)\})$$
-- **Speed**: ⭐⭐⭐⭐ (~12ms / image)
-- **Detects**: Localized patch texture variance.
-- **Best For**: Shallow depth-of-field portraits, bokeh photos, and macro shots.
+## Removed Algorithms (Backward Compatible)
 
----
+The following algorithms were consolidated as they were mathematically redundant:
 
-### 6. Bird & Wildlife Subject ROI (`"bird_subject"`) - Subject Focus
-In bird & wildlife photography, background bokeh is naturally soft while the subject is centered.
-
-- **Algorithm**:
-  1. Crop the central subject Region of Interest (ROI) box ($[y_1:y_2, x_1:x_2]$ covering central 60%).
-  2. Compute both Laplacian variance and Tenengrad gradient energy on the subject crop.
-  3. Weighted Subject Score:
-     $$\text{Subject Score} = 0.6 \times \text{Laplacian}_{\text{ROI}} + 0.4 \times \text{Tenengrad}_{\text{ROI}}$$
-- **Speed**: ⭐⭐⭐⭐ (~10ms / image)
-- **Detects**: Subject focus in central crop (ignoring background bokeh).
-- **Best For**: Bird photography, wildlife, sports, and centered action shots.
-
----
-
-### 7. AI YOLO Subject Crop (`"yolo_subject"`) - Pre-trained AI Object Detection
-Uses a pre-trained YOLOv8 neural network (`yolov8n.pt`) to detect bounding boxes around birds, wildlife, animals, or persons.
-
-- **Algorithm**:
-  1. Detect subject bounding box $[x_1, y_1, x_2, y_2]$ with highest confidence score.
-  2. Crop to the exact AI-detected subject bounding box.
-  3. Compute weighted Laplacian (60%) + Tenengrad (40%) focus score exclusively on the subject.
-- **Speed**: ⭐⭐⭐ (~25ms / image)
-- **Detects**: Exact AI-detected subject bounding box focus & sharpness.
-- **Best For**: Birding, wildlife action, sports, off-center subjects, and complex background bokeh.
+| Old Method | Redirects To | Reason |
+|------------|-------------|--------|
+| `"tenengrad"` | `"laplacian"` | Sobel gradient energy — functionally similar ranking behavior |
+| `"brenner"` | `"laplacian"` | Horizontal pixel-difference² — subset of Laplacian |
+| `"local_var"` | `"ai_subject"` | Patch variance — absorbed into AI Subject Focus's internal engine |
+| `"bird_subject"` | `"ai_subject"` | Center-60% ROI — absorbed as the no-YOLO fallback path |
 
 ---
 
@@ -97,17 +77,13 @@ Uses a pre-trained YOLOv8 neural network (`yolov8n.pt`) to detect bounding boxes
 ## 💻 Code Reference
 
 ```python
-# culler/image_loader.py - ImageLoader.calculate_sharpness
-def calculate_sharpness(self, pil_image_or_path: Union[Image.Image, str, Path], method: str = "laplacian") -> float:
-    # Method 7: AI YOLO Subject Detection
-    if method == "yolo_subject":
-        from ultralytics import YOLO
-        model = YOLO("yolov8n.pt")
-        results = model(np.array(img), verbose=False)
-        boxes = results[0].boxes
-        if len(boxes) > 0:
-            best_box = max(boxes, key=lambda b: float(b.conf[0]))
-            x1, y1, x2, y2 = [int(v) for v in best_box.xyxy[0]]
-            crop = gray[y1:y2, x1:x2]
-            return round((cv2.Laplacian(crop, cv2.CV_64F).var() * 0.6) + (np.mean(gx**2 + gy**2) * 0.02), 2)
+# culler/detectors/blur/__init__.py - calculate_sharpness router
+def calculate_sharpness(pil_img, method="laplacian", yolo_model=None):
+    m = (method or "laplacian").lower()
+    if m in ("ai_subject", "yolo_subject", "bird_subject", "local_var", ...):
+        return compute_ai_subject_sharpness(gray, pil_img, yolo_model)
+    elif m == "fft":
+        return compute_fft_sharpness(gray)
+    else:  # laplacian, tenengrad, brenner all route here
+        return compute_laplacian_sharpness(gray)
 ```

@@ -463,12 +463,16 @@ class CullingSession:
         flag_action: str = "Reject",
         tag_action: Optional[str] = "Duplicate",
         rating_action: Optional[int] = None,
+        keeper_flag: str = "Pick",
+        keeper_tag: Optional[str] = None,
+        keeper_rating: Optional[int] = None,
+        keeper_method: str = "sharpest",
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> List[ImageItem]:
         """
         Scan for Duplicates: Detects duplicate, near-identical, or burst-shot photos.
         Delegates detection to culler.detectors.duplicate_detector module.
-        Keeps the sharpest photo in each group, and applies configurable flag, tag, and rating actions to duplicates.
+        Selects keeper using keeper_method, applies configurable flag, tag, and rating actions.
         """
         if not self.items:
             return []
@@ -482,10 +486,11 @@ class CullingSession:
             progress_callback=progress_callback
         )
 
-        # Ensure sharpness scores are computed to pick the keeper
-        uncomputed = [item for item in self.items if item.sharpness_score == 0.0]
-        if uncomputed:
-            self.compute_sharpness_scores()
+        # Ensure sharpness scores are computed for sharpest-based keeper methods
+        if keeper_method in ("sharpest", "ai_eye_focus"):
+            uncomputed = [item for item in self.items if item.sharpness_score == 0.0]
+            if uncomputed:
+                self.compute_sharpness_scores()
 
         flag_map = {
             "Reject": FlagState.REJECT,
@@ -495,14 +500,18 @@ class CullingSession:
 
         flagged_duplicates = []
         for group in groups:
-            # Sort group by sharpness score descending (best photo first)
-            group.sort(key=lambda x: x.sharpness_score, reverse=True)
+            # Select keeper based on keeper_method
+            group = self._sort_group_by_keeper_method(group, keeper_method)
 
-            # Keep the sharpest shot as keeper
+            # Apply keeper actions to the best shot
             keeper = group[0]
-            if keeper.flag == FlagState.UNFLAGGED and flag_action == "Reject":
-                keeper.flag = FlagState.PICK
-                self.save_item_record(keeper)
+            if keeper_flag in flag_map:
+                keeper.flag = flag_map[keeper_flag]
+            if keeper_tag:
+                keeper.add_tag(keeper_tag)
+            if keeper_rating is not None:
+                keeper.rating = max(0, min(5, keeper_rating))
+            self.save_item_record(keeper)
 
             # Apply actions to all other duplicates in group
             for dup in group[1:]:
@@ -519,6 +528,69 @@ class CullingSession:
                 flagged_duplicates.append(dup)
 
         return flagged_duplicates
+
+    def _sort_group_by_keeper_method(self, group: List[ImageItem], keeper_method: str) -> List[ImageItem]:
+        """Sort a duplicate group so the best keeper is first, based on the selected method."""
+        import datetime
+
+        if keeper_method == "ai_eye_focus":
+            # Compute AI subject sharpness for each item in the group
+            from .detectors.blur import calculate_sharpness
+            ai_scores = {}
+            for item in group:
+                try:
+                    img = self.image_loader.load_full_image(item.path, raw_scale=0.25)
+                    if img:
+                        ai_scores[item] = calculate_sharpness(img, method="ai_subject")
+                    else:
+                        ai_scores[item] = item.sharpness_score
+                except Exception:
+                    ai_scores[item] = item.sharpness_score
+            group.sort(key=lambda x: ai_scores.get(x, 0), reverse=True)
+
+        elif keeper_method == "largest":
+            def _file_size(item):
+                try:
+                    return item.path.stat().st_size
+                except Exception:
+                    return 0
+            group.sort(key=_file_size, reverse=True)
+
+        elif keeper_method == "newest":
+            def _timestamp(item):
+                m = item.metadata
+                if m.get("date_taken"):
+                    try:
+                        dt = datetime.datetime.strptime(str(m["date_taken"]), "%Y:%m:%d %H:%M:%S")
+                        return dt.timestamp()
+                    except Exception:
+                        pass
+                try:
+                    return item.path.stat().st_mtime
+                except Exception:
+                    return 0
+            group.sort(key=_timestamp, reverse=True)
+
+        elif keeper_method == "oldest":
+            def _timestamp(item):
+                m = item.metadata
+                if m.get("date_taken"):
+                    try:
+                        dt = datetime.datetime.strptime(str(m["date_taken"]), "%Y:%m:%d %H:%M:%S")
+                        return dt.timestamp()
+                    except Exception:
+                        pass
+                try:
+                    return item.path.stat().st_mtime
+                except Exception:
+                    return float('inf')
+            group.sort(key=_timestamp, reverse=False)
+
+        else:
+            # Default: sharpest
+            group.sort(key=lambda x: x.sharpness_score, reverse=True)
+
+        return group
 
     def _compute_dhash(self, img: Image.Image) -> int:
         """
@@ -570,19 +642,29 @@ class CullingSession:
     def get_filtered_items(
         self,
         flag_filter: Optional[str] = None,
-        rating_filter: Optional[int] = None,
+        rating_filter=None,
         format_filter: Optional[str] = None,
-        tag_filter: Optional[str] = None,
+        tag_filter=None,
         search_query: Optional[str] = None
     ) -> List[ImageItem]:
+        """
+        Filter items by flag, rating, format, tag, and search query.
+        rating_filter: int (min threshold, legacy), set of ints (multiselect specific ratings), or None (all).
+        tag_filter: str (single tag), list of str (OR multiselect), or None (all).
+        """
         filtered = self.items
 
         if flag_filter and flag_filter.upper() != "ALL":
             target_flag = flag_filter.upper()
             filtered = [item for item in filtered if item.flag.value == target_flag]
 
-        if rating_filter is not None and rating_filter > 0:
-            filtered = [item for item in filtered if item.rating >= rating_filter]
+        if rating_filter is not None:
+            if isinstance(rating_filter, set):
+                # Multiselect: show items whose rating is in the set (OR logic)
+                filtered = [item for item in filtered if item.rating in rating_filter]
+            elif isinstance(rating_filter, int) and rating_filter > 0:
+                # Legacy: minimum threshold
+                filtered = [item for item in filtered if item.rating >= rating_filter]
 
         if format_filter and "ALL" not in format_filter.upper():
             target_ext = format_filter.lower()
@@ -590,9 +672,15 @@ class CullingSession:
                 target_ext = "." + target_ext
             filtered = [item for item in filtered if item.extension == target_ext or (item.is_stacked and target_ext == ".arw")]
 
-        if tag_filter and "ALL" not in tag_filter.upper():
-            target_tag = tag_filter.strip().lower()
-            filtered = [item for item in filtered if any(t.lower() == target_tag for t in item.tags)]
+        if tag_filter:
+            if isinstance(tag_filter, list):
+                # Multiselect OR logic: show items that have ANY of the selected tags
+                target_tags = {t.strip().lower() for t in tag_filter}
+                filtered = [item for item in filtered if any(t.lower() in target_tags for t in item.tags)]
+            elif isinstance(tag_filter, str) and "ALL" not in tag_filter.upper():
+                # Legacy single tag
+                target_tag = tag_filter.strip().lower()
+                filtered = [item for item in filtered if any(t.lower() == target_tag for t in item.tags)]
 
         if search_query:
             query = search_query.lower()

@@ -133,6 +133,17 @@ class DatabaseManager:
     def set_stack_raw_jpg(self, enabled: bool):
         self.set_setting("stack_raw_jpg", enabled)
 
+    def get_custom_tags(self) -> list:
+        """Get user-defined custom tags from settings."""
+        val = self.get_setting("custom_tags", default="")
+        if not val or not str(val).strip():
+            return []
+        return [t.strip() for t in str(val).split(",") if t.strip()]
+
+    def set_custom_tags(self, tags: list):
+        """Save user-defined custom tags to settings."""
+        self.set_setting("custom_tags", ",".join(t.strip() for t in tags if t.strip()))
+
     def get_picked_folder(self) -> str:
         return self.get_setting("picked_folder", default="_SELECTED")
 
