@@ -2,6 +2,7 @@ import csv
 import json
 import os
 import shutil
+import threading
 from enum import Enum
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Set, Callable, Union, Tuple
@@ -377,10 +378,50 @@ class CullingSession:
 
         return moved_count
 
+    def move_specific_files_to_trash(self, items: List[ImageItem], paths_to_delete: List[Path]) -> int:
+        """
+        Safely move specific files to the OS Recycle Bin / Trash using send2trash.
+        Handles stacked_paths correctly when only some files in a stack are deleted.
+        """
+        import send2trash
+        moved_count = 0
+        delete_set = set(p.resolve() for p in paths_to_delete)
+
+        for item in list(items):
+            remaining_paths = [p for p in list(item.stacked_paths) if p.resolve() not in delete_set]
+
+            for p in list(item.stacked_paths):
+                if p.resolve() in delete_set:
+                    if p.exists():
+                        try:
+                            send2trash.send2trash(str(p))
+                            moved_count += 1
+                        except Exception as e:
+                            log_error(f"Error moving {p} to trash: {e}")
+
+            if remaining_paths:
+                item.stacked_paths = remaining_paths
+                item.path = remaining_paths[0]
+                item.filename = item.path.name
+                item.extension = item.path.suffix.lower()
+                item.is_stacked = len(remaining_paths) > 1
+                if not item.is_stacked:
+                    item.format_name = ImageLoader.get_format_type(item.path)
+                if self.db:
+                    self.save_item_record(item)
+            else:
+                if self.db:
+                    self.db.cleanup_folder_metadata(str(item.path))
+                if item in self.items:
+                    self.items.remove(item)
+
+        return moved_count
+
     def compute_sharpness_scores(
         self,
         method: Optional[str] = None,
-        progress_callback: Optional[Callable[[int, int], None]] = None
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        cancel_event: Optional[threading.Event] = None
     ):
         """
         Calculate sharpness score for all loaded items using multi-threading.
@@ -398,6 +439,8 @@ class CullingSession:
             completed = 0
             for item in executor.map(calc_item, enumerate(self.items)):
                 completed += 1
+                if cancel_event and cancel_event.is_set():
+                    break
                 if progress_callback:
                     try:
                         progress_callback(completed, len(self.items), item.filename)
@@ -411,7 +454,8 @@ class CullingSession:
         flag_action: str = "Reject",
         tag_action: Optional[str] = "Blur",
         rating_action: Optional[int] = None,
-        progress_callback: Optional[Callable[[int, int], None]] = None
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        cancel_event: Optional[threading.Event] = None
     ) -> List[ImageItem]:
         """
         Scan for Blur: Analyzes sharpness scores across all photos using selected method.
@@ -420,11 +464,15 @@ class CullingSession:
         if not self.items:
             return []
 
-        # Force re-computation if method is explicitly requested or missing scores
-        blur_method = method or (self.db.get_blur_method() if self.db else "laplacian")
-        self.compute_sharpness_scores(method=blur_method, progress_callback=progress_callback)
+        if cancel_event and cancel_event.is_set():
+            return []
 
-        # Sort items by sharpness score
+        blur_method = method or (self.db.get_blur_method() if self.db else "laplacian")
+        self.compute_sharpness_scores(method=blur_method, progress_callback=progress_callback, cancel_event=cancel_event)
+
+        if cancel_event and cancel_event.is_set():
+            return []
+
         sorted_items = sorted(self.items, key=lambda x: x.sharpness_score)
         cutoff_index = int(len(sorted_items) * (bottom_percentile / 100.0))
         cutoff_index = max(1, min(cutoff_index, len(sorted_items)))
@@ -437,17 +485,20 @@ class CullingSession:
 
         flagged_blurry = []
         for i in range(cutoff_index):
+            if cancel_event and cancel_event.is_set():
+                break
             item = sorted_items[i]
             
-            # Tag action
-            if tag_action:
-                item.add_tag(tag_action)
+            if cancel_event and cancel_event.is_set():
+                break
             
-            # Flag action
+            tag_val = tag_action or ""
+            if tag_val:
+                item.add_tag(tag_val)
+            
             if flag_action in flag_map:
                 item.flag = flag_map[flag_action]
             
-            # Rating action
             if rating_action is not None:
                 item.rating = max(0, min(5, rating_action))
 
@@ -467,7 +518,8 @@ class CullingSession:
         keeper_tag: Optional[str] = None,
         keeper_rating: Optional[int] = None,
         keeper_method: str = "sharpest",
-        progress_callback: Optional[Callable[[int, int], None]] = None
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        cancel_event: Optional[threading.Event] = None
     ) -> List[ImageItem]:
         """
         Scan for Duplicates: Detects duplicate, near-identical, or burst-shot photos.
@@ -477,20 +529,30 @@ class CullingSession:
         if not self.items:
             return []
 
+        if cancel_event and cancel_event.is_set():
+            return []
+
         from .detectors.duplicate_detector import find_duplicates
         groups = find_duplicates(
             self.items,
             image_loader=self.image_loader,
             method=method,
             threshold=threshold,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
+            cancel_event=cancel_event
         )
+
+        if cancel_event and cancel_event.is_set():
+            return []
 
         # Ensure sharpness scores are computed for sharpest-based keeper methods
         if keeper_method in ("sharpest", "ai_eye_focus"):
             uncomputed = [item for item in self.items if item.sharpness_score == 0.0]
             if uncomputed:
-                self.compute_sharpness_scores()
+                self.compute_sharpness_scores(cancel_event=cancel_event)
+
+        if cancel_event and cancel_event.is_set():
+            return []
 
         flag_map = {
             "Reject": FlagState.REJECT,
@@ -500,10 +562,11 @@ class CullingSession:
 
         flagged_duplicates = []
         for group in groups:
-            # Select keeper based on keeper_method
+            if cancel_event and cancel_event.is_set():
+                break
+
             group = self._sort_group_by_keeper_method(group, keeper_method)
 
-            # Apply keeper actions to the best shot
             keeper = group[0]
             if keeper_flag in flag_map:
                 keeper.flag = flag_map[keeper_flag]
@@ -513,8 +576,9 @@ class CullingSession:
                 keeper.rating = max(0, min(5, keeper_rating))
             self.save_item_record(keeper)
 
-            # Apply actions to all other duplicates in group
             for dup in group[1:]:
+                if cancel_event and cancel_event.is_set():
+                    break
                 if tag_action:
                     dup.add_tag(tag_action)
                 
@@ -611,11 +675,14 @@ class CullingSession:
         self,
         item: ImageItem,
         output_dir: Optional[Union_Path_Str] = None,
-        overwrite: bool = False
+        overwrite: bool = False,
+        target_path: Optional[Union_Path_Str] = None
     ) -> Tuple[bool, str, Path]:
         source_path = item.path
 
-        if output_dir and str(output_dir).lower() != "source":
+        if target_path:
+            target_path = Path(target_path).resolve()
+        elif output_dir and str(output_dir).lower() != "source":
             target_dir = Path(output_dir).resolve()
             target_dir.mkdir(parents=True, exist_ok=True)
             target_path = target_dir / source_path.with_suffix(".jpg").name

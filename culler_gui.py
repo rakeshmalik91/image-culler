@@ -1,4 +1,5 @@
 import os
+import sys
 import threading
 import tkinter as tk
 from tkinter import filedialog as fd, messagebox as mb, simpledialog
@@ -68,6 +69,7 @@ class ImageCullerApp(ctk.CTk):
             self,
             on_open_dir=self._on_open_directory,
             on_open_explorer=self._on_open_explorer,
+            on_refresh=self._on_refresh_directory,
             on_filter_change=self._on_filter_changed,
             on_raw_settings_change=self._on_raw_settings_changed,
             on_load_100_percent=self._on_load_100_percent,
@@ -254,6 +256,12 @@ class ImageCullerApp(ctk.CTk):
         folder = fd.askdirectory(title="Select Photo Directory to Cull")
         if folder:
             self._load_directory(folder)
+
+    def _on_refresh_directory(self):
+        if self.session.directory and self.session.directory.exists():
+            self._load_directory(str(self.session.directory))
+        else:
+            mb.showinfo("Refresh Directory", "No active photo folder opened.")
 
     def _load_directory(self, folder_path: str):
         self.db.set_setting("last_directory", str(folder_path))
@@ -685,34 +693,50 @@ class ImageCullerApp(ctk.CTk):
         fmt_filter = self.toolbar.get_format_filter() if hasattr(self, "toolbar") else "All"
         stacked_count = sum(1 for it in target_items if it.is_stacked)
 
-        fmt = None
         if fmt_filter and fmt_filter.upper() == "JPG":
-            fmt = "JPG"
-        elif fmt_filter and fmt_filter.upper() in ("RAW", "ARW"):
-            fmt = "RAW"
-        elif stacked_count > 0:
-            dialog = DeleteStackedDialog(self, count=len(target_items), stacked_count=stacked_count)
-            res = dialog.result
-            if res == "both":
-                fmt = None
-            elif res == "jpg_only":
-                fmt = "JPG"
+            paths_to_delete = []
+            for item in target_items:
+                for p in item.stacked_paths:
+                    if p.suffix.lower() in (".jpg", ".jpeg"):
+                        paths_to_delete.append(p)
+            if paths_to_delete:
+                self._confirm_and_delete_files(target_items, paths_to_delete)
             else:
+                mb.showinfo("No JPG Files", "No JPG files found in the selected items.")
+        elif fmt_filter and fmt_filter.upper() in ("RAW", "ARW"):
+            paths_to_delete = []
+            for item in target_items:
+                for p in item.stacked_paths:
+                    if p.suffix.lower() == ".arw":
+                        paths_to_delete.append(p)
+            if paths_to_delete:
+                self._confirm_and_delete_files(target_items, paths_to_delete)
+            else:
+                mb.showinfo("No RAW Files", "No RAW files found in the selected items.")
+        elif stacked_count > 0:
+            dialog = DeleteStackedDialog(self, target_items=target_items)
+            if dialog.result is None:
                 return
+            self._confirm_and_delete_files(target_items, dialog.result)
         else:
-            fmt = None
+            self._confirm_and_delete_files(target_items, [p for item in target_items for p in item.stacked_paths])
 
-        if fmt is None and stacked_count == 0:
-            msg = f"Move {len(target_items)} selected photo item(s) to Recycle Bin / Trash?"
-            confirm = mb.askyesno(
-                title="Move Photos to Trash",
-                message=msg,
-                icon="warning"
-            )
-            if not confirm:
-                return
+    def _confirm_and_delete_files(self, items: List['ImageItem'], paths: List[Path]):
+        if not paths:
+            return
 
-        moved_count = self.session.move_items_to_trash(target_items, format_filter=fmt)
+        if len(paths) <= 5:
+            path_list = "\n".join(f"  • {p.name}" for p in paths)
+            msg = f"Move {len(paths)} file(s) to Recycle Bin / Trash?\n\n{path_list}"
+        else:
+            preview = "\n".join(f"  • {p.name}" for p in paths[:5])
+            msg = f"Move {len(paths)} file(s) to Recycle Bin / Trash?\n\n{preview}\n  ... and {len(paths) - 5} more"
+
+        confirm = mb.askyesno(title="Move Files to Trash", message=msg, icon="warning")
+        if not confirm:
+            return
+
+        moved_count = self.session.move_specific_files_to_trash(items, paths)
         self._update_status(f"Moved {moved_count} file(s) to Recycle Bin / Trash.")
         self._on_filter_changed()
 
@@ -784,10 +808,13 @@ class ImageCullerApp(ctk.CTk):
 
         self._update_status(f"Scanning directory for blurry photos (Method: {method}, Cutoff: {int(bottom_percentile)}%)...")
 
+        cancel_event = threading.Event()
+
         prog_dialog = ProgressDialog(
             self,
             title_text="🔍 Scan for Blur Progress",
-            header_text=f"🔍 Scanning Blurry Photos ({method.upper()})..."
+            header_text=f"🔍 Scanning Blurry Photos ({method.upper()})...",
+            on_cancel=lambda: cancel_event.set()
         )
 
         def progress_cb(completed: int, total: int, fn: str = ""):
@@ -801,9 +828,11 @@ class ImageCullerApp(ctk.CTk):
                 flag_action=flag_action,
                 tag_action=tag_action,
                 rating_action=rating_action,
-                progress_callback=progress_cb
+                progress_callback=progress_cb,
+                cancel_event=cancel_event
             )
-            self.after(0, lambda: self._on_scan_blur_complete(len(flagged), prog_dialog))
+            if not cancel_event.is_set():
+                self.after(0, lambda: self._on_scan_blur_complete(len(flagged), prog_dialog))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -813,8 +842,11 @@ class ImageCullerApp(ctk.CTk):
                 prog_dialog.destroy()
             except Exception:
                 pass
-        self._on_filter_changed()
-        mb.showinfo("Scan for Blur Complete", f"Identified {count} blurry photos and applied configured actions.")
+        if count > 0:
+            self._on_filter_changed()
+            mb.showinfo("Scan for Blur Complete", f"Identified {count} blurry photos and applied configured actions.")
+        else:
+            self._update_status("Blur scan complete — no blurry photos found.")
 
     def _on_scan_duplicates(self):
         if not self.session.items:
@@ -857,10 +889,13 @@ class ImageCullerApp(ctk.CTk):
 
         self._update_status(f"Scanning directory for duplicates (Method: {method}, Threshold: {threshold})...")
 
+        cancel_event = threading.Event()
+
         prog_dialog = ProgressDialog(
             self,
             title_text="👯 Scan for Duplicates Progress",
-            header_text=f"👯 Scanning Duplicate Photos ({method.upper()})..."
+            header_text=f"👯 Scanning Duplicate Photos ({method.upper()})...",
+            on_cancel=lambda: cancel_event.set()
         )
 
         def progress_cb(completed: int, total: int, fn: str = ""):
@@ -878,9 +913,11 @@ class ImageCullerApp(ctk.CTk):
                 keeper_tag=keeper_tag,
                 keeper_rating=keeper_rating,
                 keeper_method=keeper_method,
-                progress_callback=progress_cb
+                progress_callback=progress_cb,
+                cancel_event=cancel_event
             )
-            self.after(0, lambda: self._on_scan_dups_complete(len(flagged), prog_dialog))
+            if not cancel_event.is_set():
+                self.after(0, lambda: self._on_scan_dups_complete(len(flagged), prog_dialog))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -890,8 +927,11 @@ class ImageCullerApp(ctk.CTk):
                 prog_dialog.destroy()
             except Exception:
                 pass
-        self._on_filter_changed()
-        mb.showinfo("Scan for Duplicates Complete", f"Identified {count} duplicate photos and applied configured actions.")
+        if count > 0:
+            self._on_filter_changed()
+            mb.showinfo("Scan for Duplicates Complete", f"Identified {count} duplicate photos and applied configured actions.")
+        else:
+            self._update_status("Duplicate scan complete — no duplicates found.")
 
     def _on_unflag_all(self):
         if not self.session.items:
@@ -1089,29 +1129,33 @@ class ImageCullerApp(ctk.CTk):
 
         if len(target_items) == 1:
             item = target_items[0]
-            if save_folder in ("source", "<source>", "") or not save_folder:
-                out_dir = item.path.parent
+            suggested_name = item.path.with_suffix(".jpg").name
+            initial_dir = self.db.get_jpg_save_folder()
+            if initial_dir in ("source", "<source>", "") or not initial_dir:
+                initial_dir = str(item.path.parent)
             else:
-                out_dir = Path(save_folder)
+                initial_dir = str(Path(initial_dir).resolve())
 
-            target_jpg = out_dir / item.path.with_suffix(".jpg").name
+            res_path = fd.asksaveasfilename(
+                title="Save JPG As",
+                initialdir=initial_dir,
+                initialfile=suggested_name,
+                filetypes=[("JPEG files", "*.jpg"), ("All files", "*.*")],
+                defaultextension=".jpg"
+            )
+            if not res_path:
+                self._update_status("JPG conversion cancelled.")
+                return
 
-            overwrite = False
-            if target_jpg.exists():
-                ans = mb.askyesno(
-                    "File Already Exists",
-                    f"JPG file already exists:\n{target_jpg.name}\n\nDo you want to overwrite it?"
-                )
-                if not ans:
-                    self._update_status("JPG conversion cancelled.")
-                    return
-                overwrite = True
+            out_path = Path(res_path)
+            if out_path.suffix.lower() not in ('.jpg', '.jpeg'):
+                out_path = out_path.with_suffix('.jpg')
 
             self._update_status(f"Converting {item.filename} to JPG...")
             self.viewer.show_loading(f"🖼️ Converting to JPG: {item.filename}")
 
             def worker():
-                ok, reason, res_path = self.session.convert_item_to_jpg(item, output_dir=out_dir, overwrite=overwrite)
+                ok, reason, res_path = self.session.convert_item_to_jpg(item, target_path=out_path, overwrite=True)
                 self.after(0, lambda: self._on_convert_complete(ok, reason, res_path))
 
             threading.Thread(target=worker, daemon=True).start()
@@ -1500,63 +1544,118 @@ def copy_image_to_clipboard(pil_img: Image.Image, temp_jpg_path: Optional[Path] 
 
 class DeleteStackedDialog(ctk.CTkToplevel):
     """
-    Modal dialog asking user whether to delete Both (RAW+JPG) or JPG Only (Preserve RAW).
+    Modal dialog showing individual files with checkboxes for selective deletion.
     """
 
-    def __init__(self, master, count: int, stacked_count: int):
+    def __init__(self, master, target_items: List['ImageItem']):
         super().__init__(master)
-        self.result: Optional[str] = None
+        self.result: Optional[List[Path]] = None
+        self._check_vars: Dict[Path, ctk.BooleanVar] = {}
 
-        self.title("🗑️ Delete Options for Stacked Photos")
-        self.geometry("480x240")
-        self.resizable(False, False)
+        self.title("🗑️ Select Files to Delete")
+        self.geometry("600x480")
+        self.resizable(True, True)
 
         self.transient(master)
         self.grab_set()
 
-        lbl_msg = ctk.CTkLabel(
+        self.bind("<Escape>", lambda e: self._on_cancel())
+
+        all_paths: List[Path] = []
+        for item in target_items:
+            for p in item.stacked_paths:
+                all_paths.append(p)
+
+        lbl_title = ctk.CTkLabel(
             self,
-            text=f"Selected photos contain {stacked_count} stacked RAW+JPG pair(s).\n\nWhat would you like to move to the Recycle Bin / Trash?",
-            font=ctk.CTkFont(size=12),
-            justify="center",
-            wraplength=440
+            text=f"Select files to move to Recycle Bin / Trash ({len(all_paths)} files)",
+            font=ctk.CTkFont(size=14, weight="bold")
         )
-        lbl_msg.pack(pady=(18, 12))
+        lbl_title.pack(anchor="w", padx=15, pady=(12, 6))
 
-        btn_box = ctk.CTkFrame(self, fg_color="transparent")
-        btn_box.pack(fill="x", padx=25, pady=5)
+        btn_bar = ctk.CTkFrame(self, fg_color="transparent")
+        btn_bar.pack(fill="x", padx=15, pady=(0, 6))
 
-        btn_both = ctk.CTkButton(
-            btn_box,
-            text="🗑️ Delete Both (RAW + JPG)",
-            fg_color="#d90429",
-            hover_color="#b00020",
-            font=ctk.CTkFont(weight="bold", size=12),
-            height=36,
-            command=self._on_both
+        btn_sel_all = ctk.CTkButton(
+            btn_bar, text="Select All", width=90, height=26,
+            fg_color="#333333", hover_color="#555555",
+            font=ctk.CTkFont(size=11), command=lambda: self._set_all(True)
         )
-        btn_both.pack(fill="x", pady=4)
+        btn_sel_all.pack(side="left", padx=(0, 4))
 
-        btn_jpg = ctk.CTkButton(
-            btn_box,
-            text="🖼️ Delete JPG Only (Keep RAW Original)",
-            fg_color="#fb5607",
-            hover_color="#ff006e",
-            font=ctk.CTkFont(weight="bold", size=12),
-            height=36,
-            command=self._on_jpg_only
+        btn_desel = ctk.CTkButton(
+            btn_bar, text="Deselect All", width=90, height=26,
+            fg_color="#333333", hover_color="#555555",
+            font=ctk.CTkFont(size=11), command=lambda: self._set_all(False)
         )
-        btn_jpg.pack(fill="x", pady=4)
+        btn_desel.pack(side="left", padx=4)
+
+        self.lbl_count = ctk.CTkLabel(
+            btn_bar, text="0 selected", font=ctk.CTkFont(size=11, weight="bold")
+        )
+        self.lbl_count.pack(side="right", padx=5)
+
+        scroll_frame = ctk.CTkScrollableFrame(self, corner_radius=6, fg_color="#1e1e1e", border_width=1, border_color="#383838")
+        scroll_frame.pack(fill="both", expand=True, padx=15, pady=5)
+
+        for p in all_paths:
+            ext = p.suffix.lower()
+            if ext == ".arw":
+                badge = "RAW"
+                badge_color = "#3a86ff"
+            elif ext in (".jpg", ".jpeg"):
+                badge = "JPG"
+                badge_color = "#2b9348"
+            else:
+                badge = ext.upper().lstrip(".")
+                badge_color = "#888888"
+
+            row = ctk.CTkFrame(scroll_frame, fg_color="transparent")
+            row.pack(fill="x", pady=2)
+
+            var = ctk.BooleanVar(value=True)
+            self._check_vars[p] = var
+
+            chk = ctk.CTkCheckBox(
+                row, text="", variable=var, width=24,
+                checkbox_width=18, checkbox_height=18,
+                command=lambda v=var: self._update_count()
+            )
+            chk.pack(side="left", padx=(4, 8), pady=4)
+
+            badge_lbl = ctk.CTkLabel(
+                row, text=badge, width=40, height=22,
+                font=ctk.CTkFont(size=10, weight="bold"),
+                fg_color=badge_color, corner_radius=4,
+                anchor="center"
+            )
+            badge_lbl.pack(side="left", padx=(0, 8))
+
+            name_lbl = ctk.CTkLabel(
+                row, text=p.name, font=ctk.CTkFont(size=11),
+                anchor="w"
+            )
+            name_lbl.pack(side="left", fill="x", expand=True)
+
+        self._update_count()
+
+        bottom_bar = ctk.CTkFrame(self, fg_color="transparent")
+        bottom_bar.pack(fill="x", padx=15, pady=(8, 12))
 
         btn_cancel = ctk.CTkButton(
-            btn_box,
-            text="Cancel",
-            fg_color="#4a4e69",
-            hover_color="#22223b",
-            height=30,
+            bottom_bar, text="Cancel", width=90, height=32,
+            fg_color="#4a4e69", hover_color="#22223b",
             command=self._on_cancel
         )
-        btn_cancel.pack(fill="x", pady=4)
+        btn_cancel.pack(side="right", padx=(4, 0))
+
+        btn_delete = ctk.CTkButton(
+            bottom_bar, text="🗑️ Delete Selected", width=140, height=32,
+            fg_color="#d90429", hover_color="#b00020",
+            font=ctk.CTkFont(weight="bold", size=12),
+            command=self._on_delete
+        )
+        btn_delete.pack(side="right", padx=(0, 4))
 
         self.after(10, self._center_window)
         self.wait_window()
@@ -1576,12 +1675,21 @@ class DeleteStackedDialog(ctk.CTkToplevel):
         except Exception:
             pass
 
-    def _on_both(self):
-        self.result = "both"
-        self.destroy()
+    def _set_all(self, value: bool):
+        for var in self._check_vars.values():
+            var.set(value)
+        self._update_count()
 
-    def _on_jpg_only(self):
-        self.result = "jpg_only"
+    def _update_count(self):
+        count = sum(1 for var in self._check_vars.values() if var.get())
+        self.lbl_count.configure(text=f"{count} selected")
+
+    def _on_delete(self):
+        selected = [p for p, var in self._check_vars.items() if var.get()]
+        if not selected:
+            mb.showwarning("No Files Selected", "Please select at least one file to delete.")
+            return
+        self.result = selected
         self.destroy()
 
     def _on_cancel(self):

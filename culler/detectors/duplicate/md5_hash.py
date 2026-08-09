@@ -12,13 +12,16 @@ if TYPE_CHECKING:
 
 def find_md5_duplicates(
     items: List['ImageItem'],
-    progress_callback: Optional[Callable[[int, int], None]] = None
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+    cancel_event=None
 ) -> List[List['ImageItem']]:
     """
     Find duplicate photos using fast MD5 byte hashing (first 2MB + file size).
     """
     hashes: Dict[str, List['ImageItem']] = {}
     for idx, item in enumerate(items):
+        if cancel_event and cancel_event.is_set():
+            return []
         try:
             with open(item.path, "rb") as f:
                 data = f.read(2 * 1024 * 1024)

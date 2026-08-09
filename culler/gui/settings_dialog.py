@@ -35,6 +35,8 @@ class SettingsDialog(ctk.CTkToplevel):
         self.transient(master)
         self.grab_set()
 
+        self.bind("<Escape>", lambda e: self.destroy())
+
         self._build_widgets()
         self.after(10, self._center_window)
 

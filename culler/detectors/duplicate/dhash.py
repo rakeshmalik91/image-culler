@@ -42,13 +42,16 @@ def find_dhash_duplicates(
     items: List['ImageItem'],
     image_loader,
     max_dist: int = 6,
-    progress_callback: Optional[Callable[[int, int], None]] = None
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+    cancel_event=None
 ) -> List[List['ImageItem']]:
     """
     Find duplicate or near-identical photos using perceptual dHash Hamming distance <= max_dist.
     """
     hashes: List[Tuple[int, 'ImageItem']] = []
     for idx, item in enumerate(items):
+        if cancel_event and cancel_event.is_set():
+            return []
         try:
             img = image_loader.get_thumbnail(item.path, max_size=(160, 160))
             if img:
@@ -62,11 +65,15 @@ def find_dhash_duplicates(
     visited = set()
     groups: List[List['ImageItem']] = []
     for i in range(len(hashes)):
+        if cancel_event and cancel_event.is_set():
+            break
         if i in visited:
             continue
         h1, item1 = hashes[i]
         grp = [item1]
         for j in range(i + 1, len(hashes)):
+            if cancel_event and cancel_event.is_set():
+                break
             if j in visited:
                 continue
             h2, item2 = hashes[j]

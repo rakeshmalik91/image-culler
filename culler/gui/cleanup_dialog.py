@@ -33,6 +33,8 @@ class MetadataCleanupDialog(ctk.CTkToplevel):
         self.transient(master)
         self.grab_set()
 
+        self.bind("<Escape>", lambda e: self.destroy())
+
         self._check_vars: Dict[str, ctk.BooleanVar] = {}
         self._folder_summary: Dict[str, Dict[str, int]] = {}
 

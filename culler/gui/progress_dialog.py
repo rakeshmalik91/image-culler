@@ -29,6 +29,8 @@ class ProgressDialog(ctk.CTkToplevel):
         self.transient(master)
         self.grab_set()
 
+        self.bind("<Escape>", lambda e: self._handle_cancel())
+
         self._build_widgets(header_text)
         self.after(10, self._center_window)
 

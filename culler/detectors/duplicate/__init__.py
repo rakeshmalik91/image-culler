@@ -18,22 +18,25 @@ def find_duplicates(
     image_loader=None,
     method: str = "dhash",
     threshold: float = 6.0,
-    progress_callback: Optional[Callable[[int, int], None]] = None
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+    cancel_event=None
 ) -> List[List['ImageItem']]:
     """
     Unified entry point for scanning duplicates across 'dhash', 'md5', and 'burst_time' methods.
     """
     if not items:
         return []
+    if cancel_event and cancel_event.is_set():
+        return []
 
     m = (method or "dhash").lower()
     if m == "md5":
-        return find_md5_duplicates(items, progress_callback=progress_callback)
+        return find_md5_duplicates(items, progress_callback=progress_callback, cancel_event=cancel_event)
     elif m == "burst_time":
-        return find_burst_time_duplicates(items, threshold_seconds=threshold, progress_callback=progress_callback)
+        return find_burst_time_duplicates(items, threshold_seconds=threshold, progress_callback=progress_callback, cancel_event=cancel_event)
     else:
         max_dist = int(threshold)
-        return find_dhash_duplicates(items, image_loader=image_loader, max_dist=max_dist, progress_callback=progress_callback)
+        return find_dhash_duplicates(items, image_loader=image_loader, max_dist=max_dist, progress_callback=progress_callback, cancel_event=cancel_event)
 
 
 __all__ = [

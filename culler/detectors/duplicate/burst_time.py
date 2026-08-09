@@ -13,13 +13,16 @@ if TYPE_CHECKING:
 def find_burst_time_duplicates(
     items: List['ImageItem'],
     threshold_seconds: float = 2.0,
-    progress_callback: Optional[Callable[[int, int], None]] = None
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+    cancel_event=None
 ) -> List[List['ImageItem']]:
     """
     Group burst shot photos taken within threshold seconds using EXIF date_taken or stat mtime.
     """
     times: List[Tuple[float, 'ImageItem']] = []
     for idx, item in enumerate(items):
+        if cancel_event and cancel_event.is_set():
+            return []
         t_val = 0.0
         try:
             t_val = item.path.stat().st_mtime
@@ -34,12 +37,16 @@ def find_burst_time_duplicates(
             except Exception:
                 pass
         times.append((t_val, item))
+        if progress_callback:
+            progress_callback(idx + 1, len(times))
 
     times.sort(key=lambda x: x[0])
 
     groups: List[List['ImageItem']] = []
     current_group: List['ImageItem'] = []
     for idx, (t, item) in enumerate(times):
+        if cancel_event and cancel_event.is_set():
+            break
         if not current_group:
             current_group.append(item)
         else:

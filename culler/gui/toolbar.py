@@ -185,6 +185,7 @@ class HeaderToolbar(ctk.CTkFrame):
         master,
         on_open_dir: Callable[[], None],
         on_open_explorer: Optional[Callable[[], None]] = None,
+        on_refresh: Optional[Callable[[], None]] = None,
         on_filter_change: Callable[[str], None] = None,
         on_raw_settings_change: Callable[[], None] = None,
         on_load_100_percent: Callable[[], None] = None,
@@ -199,6 +200,7 @@ class HeaderToolbar(ctk.CTkFrame):
 
         self.on_open_dir = on_open_dir
         self.on_open_explorer = on_open_explorer
+        self.on_refresh = on_refresh
         self.on_filter_change = on_filter_change
         self.on_raw_settings_change = on_raw_settings_change
         self.on_load_100_percent = on_load_100_percent
@@ -228,14 +230,27 @@ class HeaderToolbar(ctk.CTkFrame):
         if self.on_open_explorer:
             self.btn_explorer = ctk.CTkButton(
                 self,
-                text="📂 Open in Explorer",
-                width=125,
+                text="📂",
+                width=40,
                 command=self.on_open_explorer,
                 fg_color="#4a4e69",
                 hover_color="#22223b"
             )
             self.btn_explorer.pack(side="left", padx=4, pady=5)
             ToolTip(self.btn_explorer, "Open current photo folder in OS File Explorer / Finder")
+
+        # Refresh button
+        if self.on_refresh:
+            self.btn_refresh = ctk.CTkButton(
+                self,
+                text="🔄",
+                width=40,
+                command=self.on_refresh,
+                fg_color="#4a4e69",
+                hover_color="#22223b"
+            )
+            self.btn_refresh.pack(side="left", padx=4, pady=5)
+            ToolTip(self.btn_refresh, "Refresh current directory")
 
         # Filter Segmented Control
         self.lbl_filter = ctk.CTkLabel(self, text="Filter:", font=ctk.CTkFont(weight="bold"))
@@ -284,8 +299,8 @@ class HeaderToolbar(ctk.CTkFrame):
         # 100% Full Resolution Button
         self.btn_100 = ctk.CTkButton(
             self,
-            text="🔍 Load 100%",
-            width=95,
+            text="🔍",
+            width=40,
             fg_color="#e63946",
             hover_color="#d62828",
             font=ctk.CTkFont(weight="bold"),

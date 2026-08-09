@@ -37,6 +37,8 @@ class DuplicateScanDialog(ctk.CTkToplevel):
         self.transient(master)
         self.grab_set()
 
+        self.bind("<Escape>", lambda e: self.destroy())
+
         self._btn_map: Dict[str, ctk.CTkButton] = {}
 
         self._build_widgets(initial_threshold)

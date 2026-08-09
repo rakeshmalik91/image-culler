@@ -342,10 +342,27 @@ class ThumbnailList(ctk.CTkFrame):
 
                     if self.image_loader:
                         self._load_single_thumb_async(sub_p, (70, 70), white_balance)
+
+                raw_n = sum(1 for p in item.stacked_paths if p.suffix.lower() == ".arw")
+                jpg_n = sum(1 for p in item.stacked_paths if p.suffix.lower() in (".jpg", ".jpeg"))
+                parts = []
+                if raw_n:
+                    parts.append(f"{raw_n} RAW")
+                if jpg_n:
+                    parts.append(f"{jpg_n} JPG")
+                comp = ", ".join(parts) if parts else f"{len(item.stacked_paths)} files"
+                lbl_name.configure(text=f"{base_stem.upper()} [Stacked: {comp}] {stars}")
             else:
                 # SINGLE ITEM ROW (80x80)
-                fmt_short = item.format_name.split()[0]
-                txt = f"{item.filename}\n{fmt_short} {stars}"
+                ext = item.path.suffix.lower()
+                if ext == ".arw":
+                    fmt_badge = "RAW"
+                elif ext in (".jpg", ".jpeg"):
+                    fmt_badge = "JPG"
+                else:
+                    fmt_badge = item.format_name.split()[0]
+
+                txt = f"{fmt_badge} {item.filename} {stars}"
 
                 btn = ctk.CTkButton(
                     row_frame,
