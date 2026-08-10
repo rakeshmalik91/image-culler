@@ -47,7 +47,7 @@ class ThumbnailList(ctk.CTkFrame):
         self.hdr_frame.pack(side="top", fill="x", padx=4, pady=(4, 2))
 
         self.lbl_title = ctk.CTkLabel(
-            self.hdr_frame, text="Thumbnails (0)", font=ctk.CTkFont(size=13, weight="bold")
+            self.hdr_frame, text="Images (0)", font=ctk.CTkFont(size=13, weight="bold"), anchor="w"
         )
         self.lbl_title.pack(side="left", padx=2)
 
@@ -223,7 +223,7 @@ class ThumbnailList(ctk.CTkFrame):
 
     def update_items(self, items: List[ImageItem], selected_idx: int = 0, white_balance: str = "camera"):
         log_debug(f"ThumbnailList.update_items: updating {len(items)} items, selected_idx={selected_idx}")
-        self.lbl_title.configure(text=f"Thumbnails ({len(items)})")
+        self.lbl_title.configure(text=f"Images ({len(items)})")
         self._btn_map.clear()
         self._row_frame_map.clear()
         self._indicator_map.clear()
@@ -242,13 +242,19 @@ class ThumbnailList(ctk.CTkFrame):
         placeholder_pil_80 = self._create_placeholder_image((80, 80))
         placeholder_ctk_80 = ctk.CTkImage(light_image=placeholder_pil_80, dark_image=placeholder_pil_80, size=(80, 80))
 
+        placeholder_pil_90 = self._create_placeholder_image((90, 90))
+        placeholder_ctk_90 = ctk.CTkImage(light_image=placeholder_pil_90, dark_image=placeholder_pil_90, size=(90, 90))
+
+        raw_thumb_requests: List[Tuple[Path, Tuple[int, int], str]] = []
+        other_thumb_requests: List[Tuple[Path, Tuple[int, int], str]] = []
+
         for idx, item in enumerate(items):
             is_selected = (idx == selected_idx)
 
-            # Container row frame (128px height to comfortably fit header, big thumbnails, and scrollbar)
+            # Container row frame (160px height for stacked rows to fit square thumbnails comfortably)
             row_frame = ctk.CTkFrame(
                 self.scroll_frame,
-                height=128 if (item.is_stacked and len(item.stacked_paths) >= 2) else 96,
+                height=160 if (item.is_stacked and len(item.stacked_paths) >= 2) else 96,
                 corner_radius=6,
                 border_width=2 if is_selected else 1,
                 border_color="#1f538d" if is_selected else "#3a3a3a"
@@ -309,7 +315,7 @@ class ThumbnailList(ctk.CTkFrame):
                 thumb_scroll = ctk.CTkScrollableFrame(
                     row_frame,
                     orientation="horizontal",
-                    height=95,
+                    height=130,
                     fg_color="transparent"
                 )
                 thumb_scroll.pack(side="top", fill="both", expand=True, padx=2, pady=1)
@@ -328,11 +334,11 @@ class ThumbnailList(ctk.CTkFrame):
                     btn_sub = ctk.CTkButton(
                         thumb_scroll,
                         text=badge_label,
-                        image=placeholder_ctk_70,
+                        image=self._ctk_img_cache.get(str(sub_p), placeholder_ctk_90),
                         compound="top",
                         font=ctk.CTkFont(size=10, weight="bold"),
-                        width=85,
-                        height=72,
+                        width=95,
+                        height=95,
                         fg_color="transparent",
                         hover_color="#333333",
                         command=lambda i=idx, p=sub_p: self._on_btn_clicked(i, p)
@@ -340,8 +346,12 @@ class ThumbnailList(ctk.CTkFrame):
                     btn_sub.pack(side="left", padx=3)
                     self._btn_map[str(sub_p)] = btn_sub
 
-                    if self.image_loader:
-                        self._load_single_thumb_async(sub_p, (70, 70), white_balance)
+                    if self.image_loader and str(sub_p) not in self._ctk_img_cache:
+                        req = (sub_p, (90, 90), white_balance)
+                        if ext == ".arw":
+                            raw_thumb_requests.append(req)
+                        else:
+                            other_thumb_requests.append(req)
 
                 raw_n = sum(1 for p in item.stacked_paths if p.suffix.lower() == ".arw")
                 jpg_n = sum(1 for p in item.stacked_paths if p.suffix.lower() in (".jpg", ".jpeg"))
@@ -367,7 +377,7 @@ class ThumbnailList(ctk.CTkFrame):
                 btn = ctk.CTkButton(
                     row_frame,
                     text=txt,
-                    image=placeholder_ctk_80,
+                    image=self._ctk_img_cache.get(str(item.path), placeholder_ctk_80),
                     compound="left",
                     anchor="w",
                     font=ctk.CTkFont(size=11, weight="bold"),
@@ -380,13 +390,18 @@ class ThumbnailList(ctk.CTkFrame):
                 self._btn_map[str(item.path)] = btn
                 self._label_map[idx] = btn
 
-                if self.image_loader:
-                    self._load_single_thumb_async(item.path, (80, 80), white_balance)
+                if self.image_loader and str(item.path) not in self._ctk_img_cache:
+                    req = (item.path, (80, 80), white_balance)
+                    if ext == ".arw":
+                        raw_thumb_requests.append(req)
+                    else:
+                        other_thumb_requests.append(req)
 
-        try:
-            self.scroll_frame.update_idletasks()
-        except Exception:
-            pass
+        if self.image_loader:
+            for path, size, wb in raw_thumb_requests:
+                self._load_single_thumb_async(path, size, wb)
+            for path, size, wb in other_thumb_requests:
+                self._load_single_thumb_async(path, size, wb)
 
     def _load_single_thumb_async(self, file_path: Path, max_size: Tuple[int, int], white_balance: str):
         path_str = str(file_path)

@@ -18,6 +18,9 @@ class MultiSelectDropdown(ctk.CTkFrame):
         all_label: str = "All",
         width: int = 95,
         on_change: Optional[Callable[[], None]] = None,
+        button_fg_color: Optional[str] = None,
+        button_hover_color: Optional[str] = None,
+        button_text_color: Optional[str] = None,
         **kwargs
     ):
         super().__init__(master, fg_color="transparent", **kwargs)
@@ -32,8 +35,9 @@ class MultiSelectDropdown(ctk.CTkFrame):
             text=all_label,
             width=width,
             height=28,
-            fg_color="#3a3a3a",
-            hover_color="#555555",
+            fg_color=button_fg_color if button_fg_color is not None else "#3a86ff",
+            hover_color=button_hover_color if button_hover_color is not None else "#2b6cb0",
+            text_color=button_text_color if button_text_color is not None else "#ffffff",
             font=ctk.CTkFont(size=11),
             command=self._toggle_popup,
             anchor="w"
@@ -183,7 +187,6 @@ class HeaderToolbar(ctk.CTkFrame):
     def __init__(
         self,
         master,
-        on_open_dir: Callable[[], None],
         on_open_explorer: Optional[Callable[[], None]] = None,
         on_refresh: Optional[Callable[[], None]] = None,
         on_filter_change: Callable[[str], None] = None,
@@ -198,7 +201,6 @@ class HeaderToolbar(ctk.CTkFrame):
     ):
         super().__init__(master, height=50, corner_radius=0, **kwargs)
 
-        self.on_open_dir = on_open_dir
         self.on_open_explorer = on_open_explorer
         self.on_refresh = on_refresh
         self.on_filter_change = on_filter_change
@@ -214,44 +216,6 @@ class HeaderToolbar(ctk.CTkFrame):
         self._build_widgets()
 
     def _build_widgets(self):
-        # Open Directory button
-        self.btn_open = ctk.CTkButton(
-            self,
-            text="📁 Open Directory",
-            width=120,
-            command=self.on_open_dir,
-            fg_color="#1f538d",
-            hover_color="#14375e"
-        )
-        self.btn_open.pack(side="left", padx=4, pady=5)
-        ToolTip(self.btn_open, "Select photo folder to cull")
-
-        # Open Folder in Explorer button
-        if self.on_open_explorer:
-            self.btn_explorer = ctk.CTkButton(
-                self,
-                text="📂",
-                width=40,
-                command=self.on_open_explorer,
-                fg_color="#4a4e69",
-                hover_color="#22223b"
-            )
-            self.btn_explorer.pack(side="left", padx=4, pady=5)
-            ToolTip(self.btn_explorer, "Open current photo folder in OS File Explorer / Finder")
-
-        # Refresh button
-        if self.on_refresh:
-            self.btn_refresh = ctk.CTkButton(
-                self,
-                text="🔄",
-                width=40,
-                command=self.on_refresh,
-                fg_color="#4a4e69",
-                hover_color="#22223b"
-            )
-            self.btn_refresh.pack(side="left", padx=4, pady=5)
-            ToolTip(self.btn_refresh, "Refresh current directory")
-
         # Filter Segmented Control
         self.lbl_filter = ctk.CTkLabel(self, text="Filter:", font=ctk.CTkFont(weight="bold"))
         self.lbl_filter.pack(side="left", padx=(6, 2))
@@ -263,6 +227,17 @@ class HeaderToolbar(ctk.CTkFrame):
         )
         self.seg_filter.set("All")
         self.seg_filter.pack(side="left", padx=3)
+
+        # Tag Filter (MultiSelect)
+        self.tag_filter = MultiSelectDropdown(
+            self,
+            values=["Blur", "Duplicate", "Dark", "Over-exposed"],
+            all_label="All Tags",
+            width=95,
+            on_change=lambda: self.on_filter_change("filter")
+        )
+        self.tag_filter.pack(side="left", padx=3)
+        ToolTip(self.tag_filter, "Filter by Tag (multi-select, OR logic)")
 
         # Rating Filter (MultiSelect)
         self.rating_filter = MultiSelectDropdown(
@@ -280,21 +255,14 @@ class HeaderToolbar(ctk.CTkFrame):
             self,
             values=["All Formats", ".ARW", ".JPG", ".PNG", ".HEIC"],
             command=lambda v: self.on_filter_change("filter"),
-            width=95
+            width=95,
+            fg_color="#3a86ff",
+            button_color="#2b6cb0",
+            button_hover_color="#03045e",
+            text_color="#ffffff"
         )
         self.opt_format.set("All Formats")
         self.opt_format.pack(side="left", padx=3)
-
-        # Tag Filter (MultiSelect)
-        self.tag_filter = MultiSelectDropdown(
-            self,
-            values=["Blur", "Duplicate", "Dark", "Over-exposed"],
-            all_label="All Tags",
-            width=95,
-            on_change=lambda: self.on_filter_change("filter")
-        )
-        self.tag_filter.pack(side="left", padx=3)
-        ToolTip(self.tag_filter, "Filter by Tag (multi-select, OR logic)")
 
         # 100% Full Resolution Button
         self.btn_100 = ctk.CTkButton(
@@ -389,6 +357,32 @@ class HeaderToolbar(ctk.CTkFrame):
             self.btn_settings.pack(side="right", padx=4)
             ToolTip(self.btn_settings, "Open preferences & global settings")
 
+        # Refresh button (right end)
+        if self.on_refresh:
+            self.btn_refresh = ctk.CTkButton(
+                self,
+                text="🔄",
+                width=40,
+                command=self.on_refresh,
+                fg_color="#4a4e69",
+                hover_color="#22223b"
+            )
+            self.btn_refresh.pack(side="right", padx=4)
+            ToolTip(self.btn_refresh, "Refresh current directory")
+
+        # Open Folder in Explorer button (right end)
+        if self.on_open_explorer:
+            self.btn_explorer = ctk.CTkButton(
+                self,
+                text="📂",
+                width=40,
+                command=self.on_open_explorer,
+                fg_color="#4a4e69",
+                hover_color="#22223b"
+            )
+            self.btn_explorer.pack(side="right", padx=4)
+            ToolTip(self.btn_explorer, "Open current photo folder in OS File Explorer / Finder")
+
     def get_filter_values(self) -> Dict[str, Any]:
         return {
             "flag": self.seg_filter.get(),
@@ -396,6 +390,22 @@ class HeaderToolbar(ctk.CTkFrame):
             "format": self.opt_format.get(),
             "tag": self.tag_filter.get_selected()
         }
+
+    def apply_filter_values(self, filter_vals: Dict[str, Any]):
+        if "flag" in filter_vals:
+            self.seg_filter.set(filter_vals["flag"])
+        if "rating" in filter_vals:
+            self.rating_filter.reset()
+            for r in filter_vals.get("rating", []):
+                self.rating_filter._selected.add(r)
+            self.rating_filter._update_label()
+        if "format" in filter_vals:
+            self.opt_format.set(filter_vals["format"])
+        if "tag" in filter_vals:
+            self.tag_filter.reset()
+            for t in filter_vals.get("tag", []):
+                self.tag_filter._selected.add(t)
+            self.tag_filter._update_label()
 
     def update_tag_options(self, available_tags: list):
         """Dynamically update the Tag Filter dropdown choices based on tags present in session."""

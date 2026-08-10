@@ -50,6 +50,7 @@ class ImageLoader:
     def __init__(self, exif_wrapper: Optional[ExifToolWrapper] = None):
         self.exif_wrapper = exif_wrapper or ExifToolWrapper()
         self._thumb_cache: OrderedDict[Tuple, Image.Image] = OrderedDict()
+        self._thumb_cache_index: Dict[str, Tuple] = {}
         self._full_cache: OrderedDict[Tuple, Image.Image] = OrderedDict()
 
     @classmethod
@@ -85,9 +86,10 @@ class ImageLoader:
         Instantly retrieve cached thumbnail from RAM (0ms lookup, zero disk I/O).
         """
         file_path_str = str(file_path)
-        for cache_key, thumb_img in reversed(self._thumb_cache.items()):
-            if cache_key[0] == file_path_str:
-                return thumb_img.copy()
+        cache_key = self._thumb_cache_index.get(file_path_str)
+        if cache_key and cache_key in self._thumb_cache:
+            self._thumb_cache.move_to_end(cache_key)
+            return self._thumb_cache[cache_key].copy()
         return None
 
     def load_full_image(
@@ -252,14 +254,24 @@ class ImageLoader:
     ) -> Optional[Image.Image]:
         """
         Generates thumbnail resized to fit within max_size with LRU caching.
+        Thumbnails are generated at a canonical size and cached keyed by (path, scale, WB).
+        The requested max_size is applied as a fast final downscale if needed.
         Returns a standalone image copy safely loaded in RAM.
         """
         file_path_str = str(file_path)
-        cache_key = (file_path_str, max_size, raw_scale, white_balance)
+        cache_key = (file_path_str, raw_scale, white_balance)
 
-        if cache_key in self._thumb_cache:
-            self._thumb_cache.move_to_end(cache_key)
-            return self._thumb_cache[cache_key].copy()
+        # O(1) index lookup first
+        indexed_key = self._thumb_cache_index.get(file_path_str)
+        if indexed_key and indexed_key in self._thumb_cache:
+            self._thumb_cache.move_to_end(indexed_key)
+            cached = self._thumb_cache[indexed_key]
+            if cached.size == max_size:
+                return cached.copy()
+            result = cached.copy()
+            result.thumbnail(max_size, Image.Resampling.BILINEAR)
+            result.load()
+            return result
 
         ext = Path(file_path_str).suffix.lower()
 
@@ -267,35 +279,38 @@ class ImageLoader:
         if ext in [".jpg", ".jpeg"]:
             try:
                 with Image.open(file_path_str) as raw_img:
-                    raw_img.draft("RGB", (max_size[0] * 2, max_size[1] * 2))
+                    raw_img.draft("RGB", (max_size[0] * 4, max_size[1] * 4))
                     raw_img = ImageOps.exif_transpose(raw_img)
-                    thumb = raw_img.convert("RGB")
-                    thumb.thumbnail(max_size, Image.Resampling.BILINEAR)
-                    thumb.load()
-                    self._thumb_cache[cache_key] = thumb
-                    self._thumb_cache.move_to_end(cache_key)
-                    if len(self._thumb_cache) > self.MAX_THUMB_CACHE:
-                        self._thumb_cache.popitem(last=False)
-                    return thumb.copy()
+                    img = raw_img.convert("RGB")
+                    img.load()
+                    if max(img.width, img.height) > 400:
+                        img.thumbnail((400, 400), Image.Resampling.BILINEAR)
+                        img.load()
             except Exception as e:
                 print(f"Error extracting fast JPG thumbnail for {file_path_str}: {e}")
+                img = None
+        else:
+            img = self.load_full_image(file_path_str, raw_scale=raw_scale, white_balance=white_balance)
 
-        img = self.load_full_image(file_path_str, raw_scale=0.10, white_balance=white_balance)
         if img is None:
             return None
 
-        thumb = img.copy()
-        thumb.thumbnail(max_size, Image.Resampling.LANCZOS)
-        thumb.load()
-
-        self._thumb_cache[cache_key] = thumb
+        self._thumb_cache[cache_key] = img
+        self._thumb_cache_index[file_path_str] = cache_key
         self._thumb_cache.move_to_end(cache_key)
 
-        # Evict oldest thumbnail item if max limit reached
         if len(self._thumb_cache) > self.MAX_THUMB_CACHE:
+            oldest = next(iter(self._thumb_cache))
             self._thumb_cache.popitem(last=False)
+            self._thumb_cache_index.pop(oldest[0], None)
 
-        return thumb.copy()
+        if img.size == max_size:
+            return img.copy()
+
+        result = img.copy()
+        result.thumbnail(max_size, Image.Resampling.BILINEAR)
+        result.load()
+        return result
 
     def calculate_sharpness(self, pil_image_or_path: Union[Image.Image, str, Path], method: str = "laplacian") -> float:
         """
@@ -323,4 +338,5 @@ class ImageLoader:
         Purge all cached PIL image references from memory.
         """
         self._thumb_cache.clear()
+        self._thumb_cache_index.clear()
         self._full_cache.clear()

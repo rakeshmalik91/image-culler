@@ -37,16 +37,16 @@ class ProgressDialog(ctk.CTkToplevel):
     def _center_window(self):
         self.update_idletasks()
         try:
-            pw = self.master.winfo_width()
-            ph = self.master.winfo_height()
-            px = self.master.winfo_x()
-            py = self.master.winfo_y()
-
+            sw = self.winfo_screenwidth()
+            sh = self.winfo_screenheight()
             w = self.winfo_width()
             h = self.winfo_height()
 
-            x = px + (pw - w) // 2
-            y = py + (ph - h) // 2
+            if w <= 0 or h <= 0:
+                return
+
+            x = (sw - w) // 2
+            y = (sh - h) // 2
             self.geometry(f"+{x}+{y}")
         except Exception:
             pass

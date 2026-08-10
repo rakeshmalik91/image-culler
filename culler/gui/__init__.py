@@ -12,6 +12,7 @@ from .blur_dialog import BlurScanDialog
 from .duplicate_dialog import DuplicateScanDialog
 from .progress_dialog import ProgressDialog
 from .tooltip import ToolTip
+from .tab_bar import TabBar
 
 __all__ = [
     "HeaderToolbar",
@@ -23,5 +24,6 @@ __all__ = [
     "BlurScanDialog",
     "DuplicateScanDialog",
     "ProgressDialog",
-    "ToolTip"
+    "ToolTip",
+    "TabBar"
 ]

@@ -335,3 +335,24 @@ class DatabaseManager:
                 cursor.execute("DELETE FROM image_records WHERE file_path = ?", (p,))
             conn.commit()
             return len(missing)
+
+    def get_open_tabs(self) -> Dict[str, Any]:
+        val = self.get_setting("open_tabs", default=None)
+        if val is None:
+            return {"tabs": [], "active_index": 0}
+        if isinstance(val, dict):
+            return val
+        if isinstance(val, list):
+            return {"tabs": val, "active_index": 0}
+        return {"tabs": [], "active_index": 0}
+
+    def save_open_tabs(self, tabs_data: List[Dict[str, Any]], active_index: int = 0):
+        payload = {
+            "tabs": tabs_data,
+            "active_index": active_index
+        }
+        self.set_setting("open_tabs", payload)
+
+    def get_active_tab_index(self) -> int:
+        val = self.get_open_tabs()
+        return val.get("active_index", 0)

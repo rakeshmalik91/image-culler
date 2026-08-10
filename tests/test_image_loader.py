@@ -36,15 +36,15 @@ class TestImageLoader(unittest.TestCase):
         Verify storing and retrieving thumbnails in RAM cache.
         """
         test_path = Path("D:/Photos/TEST_CACHE.JPG")
-        dummy_img = Image.new("RGB", (100, 100), color="blue")
+        dummy_img = Image.new("RGB", (400, 400), color="blue")
 
-        # Key thumbnail into cache
-        cache_key = (str(test_path), (100, 100), 0.10, "camera")
+        cache_key = (str(test_path), 0.10, "camera")
         self.loader._thumb_cache[cache_key] = dummy_img
+        self.loader._thumb_cache_index[str(test_path)] = cache_key
 
         cached = self.loader.get_cached_thumbnail(test_path)
         self.assertIsNotNone(cached)
-        self.assertEqual(cached.size, (100, 100))
+        self.assertEqual(cached.size, (400, 400))
 
     def test_full_image_ram_caching(self):
         """
@@ -67,12 +67,15 @@ class TestImageLoader(unittest.TestCase):
         test_path = Path("D:/Photos/TEST.JPG")
         dummy_img = Image.new("RGB", (50, 50))
 
-        self.loader._thumb_cache[(str(test_path), (50, 50), 0.10, "camera")] = dummy_img
+        cache_key = (str(test_path), 0.10, "camera")
+        self.loader._thumb_cache[cache_key] = dummy_img
+        self.loader._thumb_cache_index[str(test_path)] = cache_key
         self.loader._full_cache[(str(test_path), 0.25, "camera")] = dummy_img
 
         self.loader.clear_cache()
 
         self.assertEqual(len(self.loader._thumb_cache), 0)
+        self.assertEqual(len(self.loader._thumb_cache_index), 0)
         self.assertEqual(len(self.loader._full_cache), 0)
 
 
@@ -95,6 +98,36 @@ class TestImageLoader(unittest.TestCase):
         """
         orient = self.loader.exif_wrapper.get_orientation("non_existent_file.jpg")
         self.assertEqual(orient, 1)
+
+    def test_thumbnail_cache_index_o1_lookup(self):
+        """
+        Verify O(1) thumbnail cache index lookup works correctly.
+        """
+        test_path = Path("D:/Photos/TEST_INDEX.JPG")
+        dummy_img = Image.new("RGB", (400, 400), color="red")
+
+        cache_key = (str(test_path), 0.25, "camera")
+        self.loader._thumb_cache[cache_key] = dummy_img
+        self.loader._thumb_cache_index[str(test_path)] = cache_key
+
+        cached = self.loader.get_cached_thumbnail(test_path)
+        self.assertIsNotNone(cached)
+        self.assertEqual(cached.size, (400, 400))
+
+    def test_thumbnail_downscale_from_cache(self):
+        """
+        Verify get_thumbnail downscales from canonical cache size to requested max_size.
+        """
+        test_path = Path("D:/Photos/TEST_DOWNSCALE.JPG")
+        dummy_img = Image.new("RGB", (400, 400), color="green")
+
+        cache_key = (str(test_path), 0.10, "camera")
+        self.loader._thumb_cache[cache_key] = dummy_img
+        self.loader._thumb_cache_index[str(test_path)] = cache_key
+
+        thumb = self.loader.get_thumbnail(test_path, max_size=(80, 80), raw_scale=0.10, white_balance="camera")
+        self.assertIsNotNone(thumb)
+        self.assertEqual(thumb.size, (80, 80))
 
 
 if __name__ == "__main__":

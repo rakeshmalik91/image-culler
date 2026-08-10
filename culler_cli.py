@@ -39,7 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     move_r_parser.add_argument("--target", default="_REJECTED", help="Subfolder name for rejected images")
 
     # Auto Cull Blurry command
-    auto_parser = subparsers.add_parser("auto-blur", help="Automatically flag bottom % blurriest images as REJECT")
+    auto_parser = subparsers.add_parser("auto-blur", help="Automatically flag bottom %% blurriest images as REJECT")
     auto_parser.add_argument("directory", help="Path to directory containing images")
     auto_parser.add_argument("-p", "--percentile", type=float, default=15.0, help="Bottom percentile threshold (default: 15%%)")
 

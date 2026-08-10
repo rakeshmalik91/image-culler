@@ -199,7 +199,7 @@ class MetadataPanel(ctk.CTkFrame):
         if self.on_crop:
             self.btn_crop = ctk.CTkButton(
                 self.move_box,
-                text="✂️ Crop Active Image [C]",
+                text="✂️ Crop This Image",
                 fg_color="#ffb703",
                 hover_color="#fb8500",
                 text_color="#000000",

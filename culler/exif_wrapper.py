@@ -5,7 +5,7 @@ import io
 import struct
 import subprocess
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from PIL import Image
 
 
@@ -21,6 +21,7 @@ class ExifToolWrapper:
             self.exiftool_path = str(Path(exiftool_path).resolve())
         else:
             self.exiftool_path = self._find_default_exiftool()
+        self._orientation_cache: Dict[Tuple[str, float], int] = {}
 
     def _find_default_exiftool(self) -> str:
         # Check workspace lib/exif-tools directory
@@ -83,9 +84,16 @@ class ExifToolWrapper:
         Extract EXIF orientation integer (1..8) for an image file.
         Fast lookup using pure Python TIFF header parsing for RAW/TIFF files (< 0.05ms),
         PIL getexif for JPEGs/PNGs (< 0.1ms), falling back to ExifTool CLI process only if needed.
+        Results are cached by (path, mtime) to avoid repeated I/O.
         """
         if not image_path or not os.path.exists(image_path):
             return 1
+
+        cache_key = (str(Path(image_path).resolve()), os.path.getmtime(image_path))
+        if cache_key in self._orientation_cache:
+            return self._orientation_cache[cache_key]
+
+        result = 1
 
         # 1. Fast pure Python TIFF header parser for ARW/RAW/TIFF (< 0.05ms, zero subprocesses!)
         try:
@@ -93,7 +101,9 @@ class ExifToolWrapper:
             if ext in [".arw", ".tif", ".tiff", ".dng", ".nef", ".cr2", ".cr3"]:
                 orient = self._get_tiff_orientation_pure_py(image_path)
                 if orient is not None:
-                    return orient
+                    result = orient
+                    self._orientation_cache[cache_key] = result
+                    return result
         except Exception:
             pass
 
@@ -104,7 +114,9 @@ class ExifToolWrapper:
                 if exif and 0x0112 in exif:
                     val_int = int(exif[0x0112])
                     if 1 <= val_int <= 8:
-                        return val_int
+                        result = val_int
+                        self._orientation_cache[cache_key] = result
+                        return result
         except Exception:
             pass
 
@@ -129,11 +141,12 @@ class ExifToolWrapper:
                         if val is not None:
                             val_int = int(val)
                             if 1 <= val_int <= 8:
-                                return val_int
+                                result = val_int
             except Exception:
                 pass
 
-        return 1
+        self._orientation_cache[cache_key] = result
+        return result
 
     def extract_preview_bytes(self, arw_path: str, min_width: int = 1200) -> Optional[bytes]:
         """
