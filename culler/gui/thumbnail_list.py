@@ -17,6 +17,8 @@ class ThumbnailList(ctk.CTkFrame):
     Supports multi-select checkboxes, Select All / Select None, and Ctrl/Shift mouse selection.
     """
 
+    BATCH_SIZE = 20
+
     def __init__(
         self,
         master,
@@ -41,6 +43,14 @@ class ThumbnailList(ctk.CTkFrame):
         self._label_map: Dict[int, Union[ctk.CTkLabel, ctk.CTkButton]] = {}
         self._checkbox_map: Dict[int, ctk.CTkCheckBox] = {}
         self._ctk_img_cache: Dict[str, ctk.CTkImage] = {}
+
+        self._batch_after_id: Optional[str] = None
+        self._pending_items: List[ImageItem] = []
+        self._pending_selected_idx: int = 0
+        self._pending_white_balance: str = "camera"
+        self._total_thumbs: int = 0
+        self._loaded_thumbs: int = 0
+        self._load_id: int = 0
 
         # Top Header Box
         self.hdr_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -86,6 +96,29 @@ class ThumbnailList(ctk.CTkFrame):
 
         self.scroll_frame = ctk.CTkScrollableFrame(self, label_text="")
         self.scroll_frame.pack(side="top", fill="both", expand=True, padx=2, pady=2)
+
+        self.progress_frame = ctk.CTkFrame(self, fg_color="transparent", height=20)
+        self.progress_frame.pack(side="bottom", fill="x", padx=4, pady=(0, 4))
+        self.progress_frame.pack_propagate(False)
+
+        self.lbl_progress_text = ctk.CTkLabel(
+            self.progress_frame,
+            text="",
+            font=ctk.CTkFont(size=9),
+            text_color="#888888",
+            anchor="w"
+        )
+        self.lbl_progress_text.pack(side="left", padx=(2, 0))
+
+        self.progress_bar = ctk.CTkProgressBar(
+            self.progress_frame,
+            height=10,
+            corner_radius=5,
+            fg_color="#2b2b2b",
+            progress_color="#3a86ff"
+        )
+        self.progress_bar.set(0.0)
+        self.progress_bar.pack(side="right", fill="x", expand=True, padx=(4, 2))
 
     def _handle_select_all(self):
         if self.on_select_all:
@@ -210,10 +243,9 @@ class ThumbnailList(ctk.CTkFrame):
                 from ..culler_engine import CullingSession
                 primary_p = item.stacked_paths[0]
                 base_stem = CullingSession.extract_base_stem(primary_p.stem)
-                widget.configure(text=f"{base_stem.upper()} [Stacked {len(item.stacked_paths)} files] {stars}")
+                widget.configure(text=f"{base_stem.upper()} [{item.format_name}] {stars}")
             elif isinstance(widget, ctk.CTkButton):
-                fmt_short = item.format_name.split()[0]
-                widget.configure(text=f"{item.filename}\n{fmt_short} {stars}")
+                widget.configure(text=f"{item.filename}\n{stars}")
 
     def _create_placeholder_image(self, size=(70, 70)) -> Image.Image:
         img = Image.new("RGB", size, color="#222222")
@@ -221,20 +253,129 @@ class ThumbnailList(ctk.CTkFrame):
         draw.rectangle([0, 0, size[0]-1, size[1]-1], outline="#383838")
         return img
 
+    def _count_thumb_requests(self, items: List[ImageItem]) -> int:
+        count = 0
+        for item in items:
+            if item.is_stacked and len(item.stacked_paths) >= 2:
+                count += len(item.stacked_paths)
+            else:
+                count += 1
+        return count
+
+    def _count_cached_thumb_requests(self, items: List[ImageItem]) -> int:
+        count = 0
+        for item in items:
+            if item.is_stacked and len(item.stacked_paths) >= 2:
+                for sub_p in item.stacked_paths:
+                    if str(sub_p) in self._ctk_img_cache:
+                        count += 1
+            else:
+                if str(item.path) in self._ctk_img_cache:
+                    count += 1
+        return count
+
     def update_items(self, items: List[ImageItem], selected_idx: int = 0, white_balance: str = "camera"):
         log_debug(f"ThumbnailList.update_items: updating {len(items)} items, selected_idx={selected_idx}")
         self.lbl_title.configure(text=f"Images ({len(items)})")
+
+        self._load_id += 1
+        current_load_id = self._load_id
+        self._current_load_id = current_load_id
+
+        new_paths = [str(it.path) for it in items]
+        if hasattr(self, "_current_item_paths") and self._current_item_paths == new_paths:
+            self._pending_items = list(items)
+            self._pending_selected_idx = selected_idx
+            self._pending_white_balance = white_balance
+            self._batch_raw_requests.clear()
+            self._batch_other_requests.clear()
+            self._batch_index = len(items)
+            self._loaded_thumbs = self._count_cached_thumb_requests(items)
+            self._total_thumbs = self._count_thumb_requests(items)
+            self.progress_bar.set(self._loaded_thumbs / max(1, self._total_thumbs))
+            self.lbl_progress_text.configure(text=f"{self._loaded_thumbs} / {self._total_thumbs}")
+
+            prev_selected = getattr(self, "_prev_selected_indices", set())
+            prev_act = getattr(self, "_prev_active_idx", -1)
+            changed = ({selected_idx} ^ prev_selected) | {selected_idx, prev_act}
+            for idx in changed:
+                if idx not in self._row_frame_map:
+                    continue
+                frame = self._row_frame_map[idx]
+                is_active = (idx == selected_idx)
+                is_selected = (idx == selected_idx)
+                if is_active:
+                    frame.configure(border_color="#1f538d", border_width=2)
+                elif is_selected:
+                    frame.configure(border_color="#ffb703", border_width=2)
+                else:
+                    frame.configure(border_color="#3a3a3a", border_width=1)
+            self._prev_selected_indices = {selected_idx}
+            self._prev_active_idx = selected_idx
+
+            for idx, item in enumerate(items):
+                if item.is_stacked and len(item.stacked_paths) >= 2:
+                    for sub_p in item.stacked_paths:
+                        ext = sub_p.suffix.lower()
+                        if self.image_loader and str(sub_p) not in self._ctk_img_cache:
+                            req = (sub_p, (90, 90), white_balance)
+                            if ext == ".arw":
+                                self._batch_raw_requests.append(req)
+                            else:
+                                self._batch_other_requests.append(req)
+                else:
+                    ext = item.path.suffix.lower()
+                    if self.image_loader and str(item.path) not in self._ctk_img_cache:
+                        req = (item.path, (80, 80), white_balance)
+                        if ext == ".arw":
+                            self._batch_raw_requests.append(req)
+                        else:
+                            self._batch_other_requests.append(req)
+            if self.image_loader:
+                for path, size, wb in self._batch_raw_requests:
+                    self._load_single_thumb_async(path, size, wb, current_load_id)
+                for path, size, wb in self._batch_other_requests:
+                    self._load_single_thumb_async(path, size, wb, current_load_id)
+            self._current_load_id = current_load_id
+            self._update_progress_ui()
+            return
+
+        self._current_item_paths = new_paths
+
+        if self._batch_after_id is not None:
+            try:
+                self.after_cancel(self._batch_after_id)
+            except Exception:
+                pass
+            self._batch_after_id = None
+
         self._btn_map.clear()
         self._row_frame_map.clear()
         self._indicator_map.clear()
         self._label_map.clear()
         self._checkbox_map.clear()
+        self._ctk_img_cache.clear()
         self._prev_selected_indices = set()
         self._prev_active_idx = -1
         self._prev_active_path_str = None
+        self._loaded_thumbs = 0
 
         for widget in self.scroll_frame.winfo_children():
             widget.destroy()
+
+        self.progress_bar.set(0.0)
+        self.lbl_progress_text.configure(text="")
+
+        self._pending_items = list(items)
+        self._pending_selected_idx = selected_idx
+        self._pending_white_balance = white_balance
+
+        if not items:
+            self._total_thumbs = 0
+            self.progress_bar.set(0.0)
+            return
+
+        self._total_thumbs = 0
 
         placeholder_pil_70 = self._create_placeholder_image((70, 70))
         placeholder_ctk_70 = ctk.CTkImage(light_image=placeholder_pil_70, dark_image=placeholder_pil_70, size=(70, 70))
@@ -245,16 +386,33 @@ class ThumbnailList(ctk.CTkFrame):
         placeholder_pil_90 = self._create_placeholder_image((90, 90))
         placeholder_ctk_90 = ctk.CTkImage(light_image=placeholder_pil_90, dark_image=placeholder_pil_90, size=(90, 90))
 
-        raw_thumb_requests: List[Tuple[Path, Tuple[int, int], str]] = []
-        other_thumb_requests: List[Tuple[Path, Tuple[int, int], str]] = []
+        self._placeholder_ctk_70 = placeholder_ctk_70
+        self._placeholder_ctk_80 = placeholder_ctk_80
+        self._placeholder_ctk_90 = placeholder_ctk_90
 
-        for idx, item in enumerate(items):
+        self._batch_index = 0
+        self._batch_selected_idx = selected_idx
+        self._batch_white_balance = white_balance
+        self._batch_raw_requests: List[Tuple[Path, Tuple[int, int], str]] = []
+        self._batch_other_requests: List[Tuple[Path, Tuple[int, int], str]] = []
+
+        self._process_next_batch(current_load_id)
+
+    def _process_next_batch(self, load_id: int):
+        self._current_load_id = load_id
+        items = self._pending_items
+        start = self._batch_index
+        end = min(start + self.BATCH_SIZE, len(items))
+        selected_idx = self._batch_selected_idx
+        white_balance = self._batch_white_balance
+
+        for idx in range(start, end):
+            item = items[idx]
             is_selected = (idx == selected_idx)
 
-            # Container row frame (160px height for stacked rows to fit square thumbnails comfortably)
             row_frame = ctk.CTkFrame(
                 self.scroll_frame,
-                height=160 if (item.is_stacked and len(item.stacked_paths) >= 2) else 96,
+                height=190 if (item.is_stacked and len(item.stacked_paths) >= 2) else 96,
                 corner_radius=6,
                 border_width=2 if is_selected else 1,
                 border_color="#1f538d" if is_selected else "#3a3a3a"
@@ -263,7 +421,6 @@ class ThumbnailList(ctk.CTkFrame):
             row_frame.pack_propagate(False)
             self._row_frame_map[idx] = row_frame
 
-            # Flag status color bar indicator on the left edge
             flag_color = "#2b9348" if item.flag == FlagState.PICK else (
                 "#d90429" if item.flag == FlagState.REJECT else "#4a4e69"
             )
@@ -271,7 +428,6 @@ class ThumbnailList(ctk.CTkFrame):
             indicator.pack(side="left", fill="y")
             self._indicator_map[idx] = indicator
 
-            # Multi-select Checkbox
             chk = ctk.CTkCheckBox(
                 row_frame,
                 text="",
@@ -293,7 +449,6 @@ class ThumbnailList(ctk.CTkFrame):
             stars = "★" * item.rating if item.rating > 0 else ""
 
             if item.is_stacked and len(item.stacked_paths) >= 2:
-                # MULTI-FILE STACKED ROW: Big 70x70 thumbnails with horizontal scrolling
                 info_box = ctk.CTkFrame(row_frame, fg_color="transparent")
                 info_box.pack(side="top", fill="x", padx=4, pady=(2, 1))
 
@@ -305,7 +460,7 @@ class ThumbnailList(ctk.CTkFrame):
 
                 lbl_name = ctk.CTkLabel(
                     info_box,
-                    text=f"{base_stem.upper()} [Stacked {len(item.stacked_paths)} files] {stars}",
+                    text=f"{base_stem.upper()} [{item.format_name}] {stars}",
                     font=ctk.CTkFont(size=11, weight="bold"),
                     anchor="w"
                 )
@@ -315,26 +470,18 @@ class ThumbnailList(ctk.CTkFrame):
                 thumb_scroll = ctk.CTkScrollableFrame(
                     row_frame,
                     orientation="horizontal",
-                    height=130,
+                    height=160,
                     fg_color="transparent"
                 )
                 thumb_scroll.pack(side="top", fill="both", expand=True, padx=2, pady=1)
 
                 for sub_p in item.stacked_paths:
-                    ext = sub_p.suffix.lower()
-                    diff = re.sub(re.escape(base_stem), "", sub_p.stem, flags=re.IGNORECASE).strip(" _-")
-
-                    if ext == ".arw":
-                        badge_label = f"RAW {diff}" if diff else "RAW"
-                    elif sub_p.stem.lower() == base_stem.lower():
-                        badge_label = "JPG"
-                    else:
-                        badge_label = diff if diff else "JPG"
+                    badge_label = sub_p.name
 
                     btn_sub = ctk.CTkButton(
                         thumb_scroll,
                         text=badge_label,
-                        image=self._ctk_img_cache.get(str(sub_p), placeholder_ctk_90),
+                        image=self._ctk_img_cache.get(str(sub_p), self._placeholder_ctk_90),
                         compound="top",
                         font=ctk.CTkFont(size=10, weight="bold"),
                         width=95,
@@ -348,36 +495,28 @@ class ThumbnailList(ctk.CTkFrame):
 
                     if self.image_loader and str(sub_p) not in self._ctk_img_cache:
                         req = (sub_p, (90, 90), white_balance)
+                        ext = sub_p.suffix.lower()
                         if ext == ".arw":
-                            raw_thumb_requests.append(req)
+                            self._batch_raw_requests.append(req)
                         else:
-                            other_thumb_requests.append(req)
+                            self._batch_other_requests.append(req)
 
                 raw_n = sum(1 for p in item.stacked_paths if p.suffix.lower() == ".arw")
                 jpg_n = sum(1 for p in item.stacked_paths if p.suffix.lower() in (".jpg", ".jpeg"))
                 parts = []
                 if raw_n:
-                    parts.append(f"{raw_n} RAW")
+                    parts.append(f"{raw_n} ARW")
                 if jpg_n:
                     parts.append(f"{jpg_n} JPG")
                 comp = ", ".join(parts) if parts else f"{len(item.stacked_paths)} files"
                 lbl_name.configure(text=f"{base_stem.upper()} [Stacked: {comp}] {stars}")
             else:
-                # SINGLE ITEM ROW (80x80)
-                ext = item.path.suffix.lower()
-                if ext == ".arw":
-                    fmt_badge = "RAW"
-                elif ext in (".jpg", ".jpeg"):
-                    fmt_badge = "JPG"
-                else:
-                    fmt_badge = item.format_name.split()[0]
-
-                txt = f"{fmt_badge} {item.filename} {stars}"
+                txt = f"{item.filename} {stars}"
 
                 btn = ctk.CTkButton(
                     row_frame,
                     text=txt,
-                    image=self._ctk_img_cache.get(str(item.path), placeholder_ctk_80),
+                    image=self._ctk_img_cache.get(str(item.path), self._placeholder_ctk_80),
                     compound="left",
                     anchor="w",
                     font=ctk.CTkFont(size=11, weight="bold"),
@@ -392,18 +531,47 @@ class ThumbnailList(ctk.CTkFrame):
 
                 if self.image_loader and str(item.path) not in self._ctk_img_cache:
                     req = (item.path, (80, 80), white_balance)
+                    ext = item.path.suffix.lower()
                     if ext == ".arw":
-                        raw_thumb_requests.append(req)
+                        self._batch_raw_requests.append(req)
                     else:
-                        other_thumb_requests.append(req)
+                        self._batch_other_requests.append(req)
 
-        if self.image_loader:
-            for path, size, wb in raw_thumb_requests:
-                self._load_single_thumb_async(path, size, wb)
-            for path, size, wb in other_thumb_requests:
-                self._load_single_thumb_async(path, size, wb)
+        self._batch_index = end
+        self._update_progress_ui()
 
-    def _load_single_thumb_async(self, file_path: Path, max_size: Tuple[int, int], white_balance: str):
+        if end < len(items):
+            self._batch_after_id = self.after(1, lambda: self._process_next_batch(load_id))
+        else:
+            self._total_thumbs = len(self._batch_raw_requests) + len(self._batch_other_requests)
+            if self.image_loader:
+                for path, size, wb in self._batch_raw_requests:
+                    self._load_single_thumb_async(path, size, wb, load_id)
+                for path, size, wb in self._batch_other_requests:
+                    self._load_single_thumb_async(path, size, wb, load_id)
+            self._batch_after_id = None
+
+    def _update_progress_ui(self):
+        if self._total_thumbs <= 0:
+            self.progress_bar.set(0.0)
+            self.lbl_progress_text.configure(text="")
+            return
+
+        pct = self._loaded_thumbs / self._total_thumbs
+        self.progress_bar.set(pct)
+        self.lbl_progress_text.configure(text=f"{self._loaded_thumbs} / {self._total_thumbs}")
+
+        if self._loaded_thumbs >= self._total_thumbs and self._batch_index >= len(self._pending_items):
+            self.progress_bar.set(1.0)
+            self.lbl_progress_text.configure(text="Done")
+            self.after(800, self._hide_progress_bar)
+
+    def _hide_progress_bar(self):
+        if self._loaded_thumbs >= self._total_thumbs and self._batch_index >= len(self._pending_items):
+            self.progress_bar.set(0.0)
+            self.lbl_progress_text.configure(text="")
+
+    def _load_single_thumb_async(self, file_path: Path, max_size: Tuple[int, int], white_balance: str, load_id: int):
         path_str = str(file_path)
 
         def worker():
@@ -415,16 +583,33 @@ class ThumbnailList(ctk.CTkFrame):
                     white_balance=white_balance
                 )
                 if pil_thumb:
-                    self.after(0, lambda: self._update_btn_image(path_str, pil_thumb))
+                    self.after(0, lambda: self._update_btn_image(path_str, pil_thumb, load_id))
             except Exception as e:
                 log_error(f"Error generating thumbnail for {file_path.name}", exc_info=True)
 
         self._executor.submit(worker)
 
-    def _update_btn_image(self, path_str: str, pil_thumb: Image.Image):
+    def _update_btn_image(self, path_str: str, pil_thumb: Image.Image, load_id: int):
+        if load_id != getattr(self, "_current_load_id", load_id):
+            return
+
         if path_str in self._btn_map:
             btn = self._btn_map[path_str]
             w, h = pil_thumb.size
             ctk_img = ctk.CTkImage(light_image=pil_thumb, dark_image=pil_thumb, size=(w, h))
             self._ctk_img_cache[path_str] = ctk_img
             btn.configure(image=ctk_img)
+
+        self._loaded_thumbs += 1
+        self._update_progress_ui()
+
+    def destroy(self):
+        if hasattr(self, "_batch_after_id") and self._batch_after_id is not None:
+            try:
+                self.after_cancel(self._batch_after_id)
+            except Exception:
+                pass
+            self._batch_after_id = None
+        if hasattr(self, "_executor"):
+            self._executor.shutdown(wait=False, cancel_futures=True)
+        super().destroy()

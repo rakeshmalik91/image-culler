@@ -15,16 +15,20 @@ class BlurScanDialog(ctk.CTkToplevel):
     def __init__(
         self,
         master,
-        on_run: Callable[[float, str, str, Optional[str], Optional[int]], None],
+        on_run: Callable[[float, str, str, Optional[str], Optional[int], str, bool], None],
         initial_percentile: float = 15.0,
         initial_method: str = "laplacian",
         initial_flag_action: str = "Reject",
         initial_tag_action: str = "Blur",
-        initial_rating_action: str = "None"
+        initial_rating_action: str = "None",
+        initial_file_type: str = "ARW",
+        initial_subject_detect: bool = False
     ):
         super().__init__(master)
         self.on_run = on_run
         self.selected_method = initial_method if initial_method in METHODS_DATA else "laplacian"
+        self.selected_file_type = initial_file_type
+        self.selected_subject_detect = initial_subject_detect
         self.initial_flag_action = initial_flag_action
         self.initial_tag_action = initial_tag_action
         self.initial_rating_action = initial_rating_action
@@ -35,7 +39,10 @@ class BlurScanDialog(ctk.CTkToplevel):
 
         # Make modal dialog window
         self.transient(master)
-        self.grab_set()
+        try:
+            self.grab_set()
+        except Exception:
+            pass
 
         self.bind("<Escape>", lambda e: self.destroy())
 
@@ -219,6 +226,43 @@ class BlurScanDialog(ctk.CTkToplevel):
         self.combo_star.set(self.initial_rating_action)
         self.combo_star.pack(side="left")
 
+        # File Type Filter
+        f_filetype = ctk.CTkFrame(right_panel, corner_radius=6, fg_color="#1a1a1a", border_width=1, border_color="#333333")
+        f_filetype.pack(fill="x", pady=(6, 2))
+
+        lbl_filetype = ctk.CTkLabel(f_filetype, text="Scan File Type:", font=ctk.CTkFont(size=11, weight="bold"), text_color="#ffb703")
+        lbl_filetype.pack(anchor="w", padx=10, pady=(6, 4))
+
+        f_filetype_row = ctk.CTkFrame(f_filetype, fg_color="transparent")
+        f_filetype_row.pack(fill="x", padx=10, pady=(0, 6))
+
+        self.combo_filetype = ctk.CTkOptionMenu(
+            f_filetype_row,
+            values=["All", "ARW", "JPG"],
+            width=120,
+            height=26,
+            dynamic_resizing=False
+        )
+        self.combo_filetype.set(self.selected_file_type)
+        self.combo_filetype.pack(side="left")
+
+        # Subject Detection Checkbox
+        self.f_subject = ctk.CTkFrame(right_panel, corner_radius=6, fg_color="#1a1a1a", border_width=1, border_color="#333333")
+        self.f_subject.pack(fill="x", pady=(6, 2))
+
+        self.chk_subject_var = ctk.BooleanVar(value=self.selected_subject_detect)
+        self.chk_subject = ctk.CTkCheckBox(
+            self.f_subject,
+            text="Highlight Subject Detection (YOLO)",
+            variable=self.chk_subject_var,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            checkbox_width=18,
+            checkbox_height=18
+        )
+        self.chk_subject.pack(anchor="w", padx=10, pady=(8, 8))
+
+        self._update_subject_visibility(self.selected_method)
+
         # Bottom Button Bar
         btn_bar = ctk.CTkFrame(self, fg_color="transparent")
         btn_bar.pack(side="bottom", fill="x", padx=20, pady=12)
@@ -253,6 +297,7 @@ class BlurScanDialog(ctk.CTkToplevel):
                 btn.configure(fg_color="transparent", font=ctk.CTkFont(size=11, weight="normal"))
 
         self._update_card_info(method_key)
+        self._update_subject_visibility(method_key)
 
     def _update_card_info(self, method_key: str):
         info = METHODS_DATA.get(method_key, {})
@@ -267,6 +312,22 @@ class BlurScanDialog(ctk.CTkToplevel):
         self.lbl_card_cons.configure(text=info.get("cons", ""))
         self.lbl_card_best.configure(text=info.get("best_for", ""))
 
+    @staticmethod
+    def _is_yolo_method(method_key: str) -> bool:
+        return method_key.lower() in (
+            "ai_subject", "yolo_subject", "yolo", "yolo_bird_eye",
+            "bird_eye_yolo", "yolo_eye", "bird_subject", "local_var"
+        )
+
+    def _update_subject_visibility(self, method_key: str):
+        if self._is_yolo_method(method_key):
+            if not self.f_subject.winfo_ismapped():
+                self.f_subject.pack(fill="x", pady=(6, 2))
+        else:
+            if self.f_subject.winfo_ismapped():
+                self.f_subject.pack_forget()
+                self.chk_subject_var.set(False)
+
     def _on_slider_change(self, val: float):
         self.lbl_perc_val.configure(text=f"{int(val)}%")
 
@@ -274,6 +335,8 @@ class BlurScanDialog(ctk.CTkToplevel):
         perc = float(self.slider_perc.get())
         flag_act = self.combo_flag.get()
         tag_act = self.chk_tag_var.get() if self.chk_tag_var.get() else None
+        file_type = self.combo_filetype.get()
+        subject_detect = self.chk_subject_var.get()
         
         star_str = self.combo_star.get()
         rating_act: Optional[int] = None
@@ -294,7 +357,7 @@ class BlurScanDialog(ctk.CTkToplevel):
             pass
 
         if self.on_run:
-            self.on_run(perc, self.selected_method, flag_act, tag_act, rating_act)
+            self.on_run(perc, self.selected_method, flag_act, tag_act, rating_act, file_type, subject_detect)
 
         try:
             if self.master:

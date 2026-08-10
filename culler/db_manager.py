@@ -39,7 +39,7 @@ class DatabaseManager:
                 )
             """)
 
-            # Image culling history table (persist ratings, flags, sharpness, & tags)
+            # Image culling history table (persist ratings, flags, sharpness, tags, & detection boxes)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS image_records (
                     file_path TEXT PRIMARY KEY,
@@ -48,13 +48,19 @@ class DatabaseManager:
                     rating INTEGER NOT NULL DEFAULT 0,
                     sharpness REAL DEFAULT 0.0,
                     tags TEXT DEFAULT '',
+                    detection_box TEXT DEFAULT '',
                     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
 
-            # Migration check: Ensure tags column exists
+            # Migration check: Ensure tags and detection_box columns exist
             try:
                 cursor.execute("ALTER TABLE image_records ADD COLUMN tags TEXT DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute("ALTER TABLE image_records ADD COLUMN detection_box TEXT DEFAULT ''")
             except sqlite3.OperationalError:
                 pass
 
@@ -205,6 +211,13 @@ class DatabaseManager:
     def set_blur_rating_action(self, rating_str: str):
         self.set_setting("blur_rating_action", rating_str)
 
+    def get_blur_subject_detect(self) -> bool:
+        val = self.get_setting("blur_subject_detect", default="False")
+        return str(val).lower() in ("true", "1", "yes")
+
+    def set_blur_subject_detect(self, enabled: bool):
+        self.set_setting("blur_subject_detect", str(enabled).lower())
+
     # Duplicate Action Preferences
     def get_duplicate_flag_action(self) -> str:
         return self.get_setting("duplicate_flag_action", default="Reject")
@@ -226,18 +239,20 @@ class DatabaseManager:
 
     # --- Image Record Persistence & Cleanup API ---
 
-    def save_image_record(self, file_path: str, filename: str, flag: str, rating: int = 0, sharpness: float = 0.0, tags: str = ""):
+    def save_image_record(self, file_path: str, filename: str, flag: str, rating: int = 0, sharpness: float = 0.0, tags: str = "", detection_box: Optional[Tuple[float, float, float, float]] = None):
+        box_str = json.dumps(list(detection_box)) if detection_box else ""
         with self._get_connection() as conn:
             conn.execute("""
-                INSERT INTO image_records (file_path, filename, flag, rating, sharpness, tags)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO image_records (file_path, filename, flag, rating, sharpness, tags, detection_box)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(file_path) DO UPDATE SET
                     flag = excluded.flag,
                     rating = excluded.rating,
                     sharpness = excluded.sharpness,
                     tags = excluded.tags,
+                    detection_box = excluded.detection_box,
                     last_updated = CURRENT_TIMESTAMP
-            """, (file_path, filename, flag, rating, sharpness, tags))
+            """, (file_path, filename, flag, rating, sharpness, tags, box_str))
             conn.commit()
 
     def get_all_records_for_dir(self, dir_path: str) -> Dict[str, Dict[str, Any]]:
@@ -247,12 +262,22 @@ class DatabaseManager:
             records = {}
             for r in rows:
                 norm_key = str(Path(r["file_path"]).resolve())
+                box_val = None
+                if "detection_box" in r.keys() and r["detection_box"]:
+                    try:
+                        parsed = json.loads(r["detection_box"])
+                        if isinstance(parsed, (list, tuple)) and len(parsed) == 4:
+                            box_val = (float(parsed[0]), float(parsed[1]), float(parsed[2]), float(parsed[3]))
+                    except Exception:
+                        box_val = None
+
                 records[norm_key] = {
                     "filename": r["filename"],
                     "flag": r["flag"],
                     "rating": r["rating"],
                     "sharpness": r["sharpness"],
                     "tags": r["tags"] if "tags" in r.keys() else "",
+                    "detection_box": box_val,
                 }
             return records
 

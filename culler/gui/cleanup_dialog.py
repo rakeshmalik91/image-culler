@@ -29,9 +29,12 @@ class MetadataCleanupDialog(ctk.CTkToplevel):
         self.geometry("720x560")
         self.minsize(640, 480)
 
-        # Make modal window transient & grab focus
+        # Make modal dialog window
         self.transient(master)
-        self.grab_set()
+        try:
+            self.grab_set()
+        except Exception:
+            pass
 
         self.bind("<Escape>", lambda e: self.destroy())
 

@@ -80,7 +80,7 @@ class TestImageCullerAppTabLogic(unittest.TestCase):
                 pass
 
     def _make_app(self):
-        from culler_gui import ImageCullerApp
+        from gui import ImageCullerApp
         app = MagicMock()
         app.db = self.db
         app.tabs = []
@@ -115,7 +115,7 @@ class TestImageCullerAppTabLogic(unittest.TestCase):
         return app
 
     def test_create_tab_info(self):
-        from culler_gui import ImageCullerApp
+        from gui import ImageCullerApp
 
         app = self._make_app()
         tab = ImageCullerApp._create_tab_info(app, "D:/Photos/2024")
@@ -132,7 +132,7 @@ class TestImageCullerAppTabLogic(unittest.TestCase):
         self.assertFalse(tab["is_loaded"])
 
     def test_add_tab_appends_and_activates(self):
-        from culler_gui import ImageCullerApp
+        from gui import ImageCullerApp
 
         app = self._make_app()
         app._load_tab_directory = MagicMock()
@@ -148,7 +148,7 @@ class TestImageCullerAppTabLogic(unittest.TestCase):
         app._persist_tabs_state.assert_called_once()
 
     def test_close_tab_removes_and_readjusts_active(self):
-        from culler_gui import ImageCullerApp
+        from gui import ImageCullerApp
 
         app = self._make_app()
         app._persist_tabs_state = MagicMock()
@@ -169,7 +169,7 @@ class TestImageCullerAppTabLogic(unittest.TestCase):
         app._persist_tabs_state.assert_called_once()
 
     def test_close_active_tab_switches_to_neighbor(self):
-        from culler_gui import ImageCullerApp
+        from gui import ImageCullerApp
 
         app = self._make_app()
         app._persist_tabs_state = MagicMock()
@@ -189,7 +189,7 @@ class TestImageCullerAppTabLogic(unittest.TestCase):
         app._apply_tab_state.assert_called_once_with(app.tabs[0])
 
     def test_close_tab_when_only_one_does_nothing(self):
-        from culler_gui import ImageCullerApp
+        from gui import ImageCullerApp
 
         app = self._make_app()
         ImageCullerApp._add_tab(app, "D:/Photos/A")
@@ -201,7 +201,7 @@ class TestImageCullerAppTabLogic(unittest.TestCase):
         app.tab_bar.remove_tab.assert_not_called()
 
     def test_switch_tab_saves_and_applies_state(self):
-        from culler_gui import ImageCullerApp
+        from gui import ImageCullerApp
 
         app = self._make_app()
         app._persist_tabs_state = MagicMock()
@@ -226,7 +226,7 @@ class TestImageCullerAppTabLogic(unittest.TestCase):
         self.assertEqual(app.active_tab_index, 1)
 
     def test_switch_tab_loads_if_not_loaded(self):
-        from culler_gui import ImageCullerApp
+        from gui import ImageCullerApp
 
         app = self._make_app()
         app._persist_tabs_state = MagicMock()
@@ -248,7 +248,7 @@ class TestImageCullerAppTabLogic(unittest.TestCase):
         app._apply_tab_state.assert_called_once_with(tab_b)
 
     def test_switch_same_index_noop(self):
-        from culler_gui import ImageCullerApp
+        from gui import ImageCullerApp
 
         app = self._make_app()
         app._persist_tabs_state = MagicMock()
@@ -260,7 +260,7 @@ class TestImageCullerAppTabLogic(unittest.TestCase):
         app._save_active_tab_state.assert_not_called()
 
     def test_save_active_tab_state(self):
-        from culler_gui import ImageCullerApp
+        from gui import ImageCullerApp
 
         app = self._make_app()
         app.current_items = [MagicMock()]
@@ -292,7 +292,7 @@ class TestImageCullerAppTabLogic(unittest.TestCase):
         app.toolbar.get_filter_values.assert_called_once()
 
     def test_persist_tabs_state_roundtrip(self):
-        from culler_gui import ImageCullerApp
+        from gui import ImageCullerApp
 
         app = self._make_app()
         ImageCullerApp._add_tab(app, "D:/Photos/A")
@@ -312,7 +312,7 @@ class TestImageCullerAppTabLogic(unittest.TestCase):
         self.assertEqual(loaded["active_index"], 1)
 
     def test_restore_tabs_state(self):
-        from culler_gui import ImageCullerApp
+        from gui import ImageCullerApp
 
         app = self._make_app()
         app._load_tab_directory = MagicMock()
@@ -338,7 +338,7 @@ class TestImageCullerAppTabLogic(unittest.TestCase):
         app._load_tab_directory.assert_called_once_with(app.tabs[0], show_progress=True)
 
     def test_restore_tabs_skips_missing_directories(self):
-        from culler_gui import ImageCullerApp
+        from gui import ImageCullerApp
 
         app = self._make_app()
         app._load_tab_directory = MagicMock()
@@ -356,7 +356,7 @@ class TestImageCullerAppTabLogic(unittest.TestCase):
         self.assertEqual(app.tabs[0]["tab_label"], "Exists")
 
     def test_get_active_tab_returns_correct_tab(self):
-        from culler_gui import ImageCullerApp
+        from gui import ImageCullerApp
 
         app = self._make_app()
         app.tabs = [{"directory": "A"}, {"directory": "B"}, {"directory": "C"}]
@@ -366,7 +366,7 @@ class TestImageCullerAppTabLogic(unittest.TestCase):
         self.assertEqual(tab["directory"], "C")
 
     def test_get_active_tab_returns_none_when_empty(self):
-        from culler_gui import ImageCullerApp
+        from gui import ImageCullerApp
 
         app = self._make_app()
         app.tabs = []
@@ -376,7 +376,7 @@ class TestImageCullerAppTabLogic(unittest.TestCase):
         self.assertIsNone(tab)
 
     def test_tab_independent_filter_values(self):
-        from culler_gui import ImageCullerApp
+        from gui import ImageCullerApp
 
         app = self._make_app()
         app.toolbar.get_filter_values.return_value = {"flag": "Pick", "rating": ["5"], "format": ".ARW", "tag": ["Blur"]}
@@ -402,6 +402,58 @@ class TestImageCullerAppTabLogic(unittest.TestCase):
         self.assertEqual(app.tabs[0]["filter_values"]["rating"], ["5"])
         self.assertEqual(app.tabs[1]["filter_values"]["flag"], "Reject")
         self.assertEqual(app.tabs[1]["filter_values"]["rating"], ["1", "2"])
+
+
+class TestTabBarDynamicIndex(unittest.TestCase):
+    """
+    Unit tests for TabBar dynamic index lookups after tab removal and reordering.
+    """
+
+    def test_close_btn_click_resolves_correct_index_after_removal(self):
+        from culler.gui.tab_bar import TabBar
+        closed_indices = []
+
+        bar = TabBar.__new__(TabBar)
+        bar.on_tab_closed = lambda idx: closed_indices.append(idx)
+        bar._tab_buttons = [MagicMock(), MagicMock(), MagicMock()]
+        bar._close_buttons = [MagicMock(), MagicMock(), MagicMock()]
+        bar._tab_labels = ["Tab 0", "Tab 1", "Tab 2"]
+        bar._tab_count = 3
+        bar._active_index = 0
+        bar._update_scroll_region = MagicMock()
+
+        btn0, btn1, btn2 = bar._close_buttons[0], bar._close_buttons[1], bar._close_buttons[2]
+
+        # Close middle tab (index 1)
+        bar._handle_close_btn_click(btn1)
+        self.assertEqual(closed_indices, [1])
+
+        # Remove tab 1
+        bar.remove_tab(1)
+        self.assertEqual(bar._tab_count, 2)
+        self.assertEqual(bar._close_buttons, [btn0, btn2])
+
+        # Click close on what was originally btn2 (now at list index 1)
+        closed_indices.clear()
+        bar._handle_close_btn_click(btn2)
+        self.assertEqual(closed_indices, [1], "Clicking close on btn2 should resolve to new index 1, not old index 2")
+
+    def test_get_index_for_widget_after_reorder(self):
+        from culler.gui.tab_bar import TabBar
+
+        bar = TabBar.__new__(TabBar)
+        btnA, btnB, btnC = MagicMock(), MagicMock(), MagicMock()
+        bar._tab_buttons = [btnA, btnB, btnC]
+        bar._close_buttons = [MagicMock(), MagicMock(), MagicMock()]
+        bar._tab_labels = ["A", "B", "C"]
+        bar._tab_count = 3
+        bar._active_index = 0
+        bar._update_scroll_region = MagicMock()
+
+        bar.reorder(0, 2)  # Move A to position 2: [B, C, A]
+        self.assertEqual(bar._get_index_for_widget(btnA), 2)
+        self.assertEqual(bar._get_index_for_widget(btnB), 0)
+        self.assertEqual(bar._get_index_for_widget(btnC), 1)
 
 
 if __name__ == "__main__":

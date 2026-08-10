@@ -219,12 +219,13 @@ class TestCullingEngine(unittest.TestCase):
 
     def test_clear_all_metadata(self):
         """
-        Verify that clear_all_metadata resets flags, tags, and ratings across all items.
+        Verify that clear_all_metadata resets flags, tags, ratings, and detection boxes across all items.
         """
         item = ImageItem(Path("D:/Photos/IMG_001.JPG"))
         item.flag = FlagState.PICK
         item.rating = 5
         item.add_tag("Blur")
+        item.detection_box = (0.1, 0.2, 0.8, 0.9)
         self.session.items = [item]
 
         count = self.session.clear_all_metadata()
@@ -232,6 +233,59 @@ class TestCullingEngine(unittest.TestCase):
         self.assertEqual(item.flag, FlagState.UNFLAGGED)
         self.assertEqual(item.rating, 0)
         self.assertEqual(len(item.tags), 0)
+        self.assertIsNone(item.detection_box)
+
+    def test_detection_box_db_persistence(self):
+        """
+        Verify detection_box is persisted to and restored from the database.
+        """
+        dir_path = Path("D:/Photos/BoxTest").resolve()
+        file_path = str(dir_path / "IMG_002.JPG")
+        box = (0.15, 0.25, 0.85, 0.95)
+        self.db.save_image_record(
+            file_path=file_path,
+            filename="IMG_002.JPG",
+            flag="unflagged",
+            rating=0,
+            sharpness=0.0,
+            tags="",
+            detection_box=box
+        )
+
+        records = self.db.get_all_records_for_dir(str(dir_path))
+        self.assertIn(file_path, records)
+        self.assertIsNotNone(records[file_path]["detection_box"])
+        restored_box = records[file_path]["detection_box"]
+        self.assertAlmostEqual(restored_box[0], 0.15, places=4)
+        self.assertAlmostEqual(restored_box[1], 0.25, places=4)
+        self.assertAlmostEqual(restored_box[2], 0.85, places=4)
+        self.assertAlmostEqual(restored_box[3], 0.95, places=4)
+
+    def test_detection_box_cleared_in_db(self):
+        """
+        Verify that saving an item with detection_box=None clears it in the DB.
+        """
+        dir_path = Path("D:/Photos/BoxClear").resolve()
+        file_path = str(dir_path / "IMG_003.JPG")
+        box = (0.1, 0.2, 0.8, 0.9)
+        self.db.save_image_record(
+            file_path=file_path,
+            filename="IMG_003.JPG",
+            flag="unflagged",
+            detection_box=box
+        )
+
+        # Now clear it
+        self.db.save_image_record(
+            file_path=file_path,
+            filename="IMG_003.JPG",
+            flag="unflagged",
+            detection_box=None
+        )
+
+        records = self.db.get_all_records_for_dir(str(dir_path))
+        self.assertIn(file_path, records)
+        self.assertIsNone(records[file_path]["detection_box"])
 
     @patch.object(CullingSession, "compute_sharpness_scores")
     def test_scan_for_blur_sensitivity_one_percent(self, mock_compute_scores):

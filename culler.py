@@ -43,6 +43,13 @@ def build_parser() -> argparse.ArgumentParser:
     auto_parser.add_argument("directory", help="Path to directory containing images")
     auto_parser.add_argument("-p", "--percentile", type=float, default=15.0, help="Bottom percentile threshold (default: 15%%)")
 
+    # Auto Detect Duplicates command
+    auto_dup_parser = subparsers.add_parser("auto-duplicate", help="Detect duplicate photos, keep best, flag rejects")
+    auto_dup_parser.add_argument("directory", help="Path to directory containing images")
+    auto_dup_parser.add_argument("-m", "--method", choices=["dhash", "histogram"], default="dhash", help="Duplicate detection method")
+    auto_dup_parser.add_argument("-t", "--threshold", type=float, default=6.0, help="Similarity threshold (default: 6.0)")
+    auto_dup_parser.add_argument("--keeper", choices=["sharpest", "newest", "largest"], default="sharpest", help="Keeper selection strategy")
+
     # Export command
     export_parser = subparsers.add_parser("export", help="Export culling manifest and metadata to JSON or CSV")
     export_parser.add_argument("directory", help="Path to directory containing images")
@@ -199,6 +206,36 @@ def cmd_auto_blur(session: CullingSession, args):
         console.print(f"  - [red]{item.filename}[/red] (Sharpness score: {item.sharpness_score})")
 
 
+def cmd_auto_duplicate(session: CullingSession, args):
+    session.scan_directory(args.directory)
+    console.print(f"[cyan]Scanning {len(session.items)} images for duplicates ({args.method}, threshold={args.threshold})...[/cyan]")
+    
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        console=console
+    ) as progress:
+        task = progress.add_task("Detecting duplicates...", total=len(session.items))
+        
+        def update_cb(done, total):
+            progress.update(task, completed=done)
+
+        flagged = session.scan_for_duplicates(
+            method=args.method,
+            threshold=args.threshold,
+            flag_action="Reject",
+            tag_action="Duplicate",
+            keeper_flag="Pick",
+            keeper_method=args.keeper,
+            progress_callback=update_cb
+        )
+
+    console.print(f"[bold red]Flagged {len(flagged)} duplicate images as REJECT.[/bold red]")
+    for item in flagged:
+        console.print(f"  - [red]{item.filename}[/red]")
+
+
 def cmd_move_picked(session: CullingSession, args):
     session.scan_directory(args.directory)
     moved = session.move_items_by_flag(FlagState.PICK, args.target)
@@ -245,6 +282,8 @@ def main():
         cmd_cull(session, args)
     elif args.command == "auto-blur":
         cmd_auto_blur(session, args)
+    elif args.command == "auto-duplicate":
+        cmd_auto_duplicate(session, args)
     elif args.command == "move-picked":
         cmd_move_picked(session, args)
     elif args.command == "move-rejected":

@@ -71,7 +71,7 @@ def compute_patch_grid_sharpness(crop: Any, grid_size: int = 8) -> float:
         return 0.0
 
 
-def compute_ai_subject_sharpness(gray: Any, rgb_img: Image.Image, yolo_model: Optional[Any] = None) -> float:
+def compute_ai_subject_sharpness(gray: Any, rgb_img: Image.Image, yolo_model: Optional[Any] = None, return_box: bool = False) -> float:
     """
     AI Subject Focus sharpness score.
 
@@ -86,9 +86,17 @@ def compute_ai_subject_sharpness(gray: Any, rgb_img: Image.Image, yolo_model: Op
       4. Also compute patch grid score for bokeh protection.
       5. Falls back to center-60% ROI crop if no YOLO detection available.
     """
-    if cv2 is None or np is None or gray is None:
+    if cv2 is None or np is None:
+        if return_box:
+            return 0.0, None
         return 0.0
-    h, w = gray.shape
+
+    gray_available = gray is not None
+    if gray_available:
+        h, w = gray.shape
+    else:
+        h, w = 0, 0
+    best_box_coords = None
     try:
         if yolo_model is None:
             from ultralytics import YOLO
@@ -102,6 +110,13 @@ def compute_ai_subject_sharpness(gray: Any, rgb_img: Image.Image, yolo_model: Op
         if len(boxes) > 0:
             best_box = max(boxes, key=lambda b: float(b.conf[0]))
             x1, y1, x2, y2 = [int(v) for v in best_box.xyxy[0]]
+            best_box_coords = (x1, y1, x2, y2)
+
+            # If gray is not available (box-only detection mode), return box immediately
+            if not gray_available:
+                if return_box:
+                    return 0.0, best_box_coords
+                return 0.0
 
             # Inset box by 10% to eliminate edge background pixels
             bw, bh = x2 - x1, y2 - y1
@@ -143,12 +158,20 @@ def compute_ai_subject_sharpness(gray: Any, rgb_img: Image.Image, yolo_model: Op
 
                 # Take the higher of region blend or grid score
                 final = max(blended, score_grid)
+                if return_box and best_box_coords:
+                    return round(final, 2), best_box_coords
                 return round(final, 2)
     except Exception:
         pass
 
     # Fallback to central ROI crop if no object detected or YOLO unavailable
-    return compute_bird_subject_sharpness(gray)
+    if gray_available:
+        fallback_score = compute_bird_subject_sharpness(gray)
+    else:
+        fallback_score = 0.0
+    if return_box:
+        return fallback_score, None
+    return fallback_score
 
 
 # Backward compatibility alias

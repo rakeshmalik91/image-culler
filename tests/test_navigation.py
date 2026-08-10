@@ -234,14 +234,14 @@ class TestNavigationAndSelection(unittest.TestCase):
         """
         Verify copy_image_to_clipboard handles PIL images and None input cleanly.
         """
-        from culler_gui import copy_image_to_clipboard
+        from gui import copy_image_to_clipboard
         self.assertFalse(copy_image_to_clipboard(None))
 
     def test_load_100_percent_shortcut(self):
         """
         Verify that _on_load_100_percent method is available as a one-time operation.
         """
-        from culler_gui import ImageCullerApp
+        from gui import ImageCullerApp
         self.assertTrue(hasattr(ImageCullerApp, "_on_load_100_percent"))
 
 

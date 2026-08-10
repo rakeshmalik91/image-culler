@@ -47,6 +47,7 @@ class ImageItem:
         self.tags: Set[str] = set()
         self.dhash: Optional[int] = None
         self.metadata: Dict[str, Any] = {}
+        self.detection_box: Optional[Tuple[float, float, float, float]] = None
 
     @property
     def tags_str(self) -> str:
@@ -180,27 +181,34 @@ class CullingSession:
                 groups[key].append(p)
 
             for (parent, base_stem), group_paths in groups.items():
-                if len(group_paths) > 1:
-                    # Sort group: RAW (.ARW) first, then exact base stem JPG, then edits (_1, _crop)
-                    def sort_key(p: Path):
-                        ext = p.suffix.lower()
-                        s = p.stem.lower()
-                        if ext == ".arw": return (0, s)
-                        if s == base_stem.lower(): return (1, s)
-                        return (2, s)
+                raw_paths = [p for p in group_paths if p.suffix.lower() == ".arw"]
 
-                    group_paths.sort(key=sort_key)
+                if len(raw_paths) == 1 and len(group_paths) > 1:
+                    group_paths.sort(key=lambda p: (
+                        0 if p.suffix.lower() == ".arw" else
+                        1 if p.suffix.lower() in (".jpg", ".jpeg") else
+                        2
+                    ))
                     primary = group_paths[0]
                     item = ImageItem(primary)
-                    item.stacked_paths = group_paths
+                    item.stacked_paths = list(group_paths)
                     item.is_stacked = True
                     display_stem = self.extract_base_stem(primary.stem).upper()
-                    item.filename = f"{display_stem} [Stacked {len(group_paths)} files]"
-                    item.format_name = f"Stacked ({len(group_paths)} files)"
+                    raw_n = sum(1 for p in group_paths if p.suffix.lower() == ".arw")
+                    jpg_n = sum(1 for p in group_paths if p.suffix.lower() in (".jpg", ".jpeg"))
+                    parts = []
+                    if raw_n:
+                        parts.append(f"{raw_n} ARW")
+                    if jpg_n:
+                        parts.append(f"{jpg_n} JPG")
+                    comp = ", ".join(parts)
+                    item.filename = f"{display_stem} [Stacked: {comp}]"
+                    item.format_name = f"Stacked ({comp})"
                     item.size_bytes = sum(p.stat().st_size for p in item.stacked_paths if p.exists())
                     self.items.append(item)
                 else:
-                    self.items.append(ImageItem(group_paths[0]))
+                    for p in group_paths:
+                        self.items.append(ImageItem(p))
         else:
             # Unstacked mode: Load every supported file as an independent ImageItem
             for p in found_paths:
@@ -208,6 +216,12 @@ class CullingSession:
 
         # Sort naturally by primary filename
         self.items.sort(key=lambda x: x.path.name.lower())
+
+        if progress_callback:
+            try:
+                progress_callback(0, len(self.items), f"Found {len(self.items)} photos")
+            except TypeError:
+                progress_callback(0, len(self.items))
 
         # Fetch saved DB records for this directory
         db_records = self.db.get_all_records_for_dir(str(dir_path))
@@ -238,6 +252,8 @@ class CullingSession:
                     for t in tags_raw.split(","):
                         if t.strip():
                             item.add_tag(t.strip())
+                if rec.get("detection_box"):
+                    item.detection_box = rec["detection_box"]
 
             if progress_callback:
                 try:
@@ -249,7 +265,7 @@ class CullingSession:
 
     def save_item_record(self, item: ImageItem):
         """
-        Save/update image item record in SQLite DB (handles stacked pairs & tags).
+        Save/update image item record in SQLite DB (handles stacked pairs, tags, & detection boxes).
         """
         if self.db:
             for p in item.stacked_paths:
@@ -259,7 +275,8 @@ class CullingSession:
                     flag=item.flag.value,
                     rating=item.rating,
                     sharpness=item.sharpness_score,
-                    tags=item.tags_str
+                    tags=item.tags_str,
+                    detection_box=item.detection_box
                 )
 
     def unflag_all_items(self) -> int:
@@ -299,7 +316,7 @@ class CullingSession:
 
     def clear_all_metadata(self) -> int:
         """
-        Reset flags to UNFLAGGED, remove all tags, and set star ratings to 0 across all items in session.
+        Reset flags to UNFLAGGED, remove all tags, set star ratings to 0, and clear detection boxes across all items in session.
         """
         count = 0
         for item in self.items:
@@ -312,6 +329,9 @@ class CullingSession:
                 changed = True
             if item.rating != 0:
                 item.rating = 0
+                changed = True
+            if item.detection_box is not None:
+                item.detection_box = None
                 changed = True
             if changed:
                 self.save_item_record(item)
@@ -421,13 +441,15 @@ class CullingSession:
         self,
         method: Optional[str] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None,
-        cancel_event: Optional[threading.Event] = None
+        cancel_event: Optional[threading.Event] = None,
+        file_type_filter: Optional[str] = None
     ):
         """
         Calculate sharpness score for all loaded items using multi-threading.
         Supports algorithms: 'laplacian', 'tenengrad', 'bird_subject'.
         """
         blur_method = method or (self.db.get_blur_method() if self.db else "laplacian")
+        items_to_process = self._filter_items_by_file_type(file_type_filter)
 
         def calc_item(index_and_item):
             idx, item = index_and_item
@@ -437,8 +459,83 @@ class CullingSession:
 
         with ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 4)) as executor:
             completed = 0
-            for item in executor.map(calc_item, enumerate(self.items)):
+            for item in executor.map(calc_item, enumerate(items_to_process)):
                 completed += 1
+                if cancel_event and cancel_event.is_set():
+                    break
+                if progress_callback:
+                    try:
+                        progress_callback(completed, len(items_to_process), item.filename)
+                    except TypeError:
+                        progress_callback(completed, len(items_to_process))
+
+    def _filter_items_by_file_type(self, file_type_filter: Optional[str]) -> List['ImageItem']:
+        if not file_type_filter or file_type_filter == "All":
+            return self.items
+        ext_map = {"ARW": ".arw", "JPG": ".jpg"}
+        target_ext = ext_map.get(file_type_filter.upper())
+        if target_ext:
+            return [item for item in self.items if item.path.suffix.lower() == target_ext]
+        return self.items
+
+    def detect_subjects(
+        self,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        cancel_event: Optional[threading.Event] = None
+    ) -> List[ImageItem]:
+        if not self.items:
+            return []
+
+        if cancel_event and cancel_event.is_set():
+            return []
+
+        try:
+            from ultralytics import YOLO
+            from pathlib import Path
+            models_dir = Path(__file__).resolve().parent.parent.parent.parent / "lib" / "models"
+            models_dir.mkdir(parents=True, exist_ok=True)
+            model_path = models_dir / "yolov8n.pt"
+            yolo_model = YOLO(str(model_path))
+        except Exception:
+            return []
+
+        from .detectors.blur.yolo_subject import compute_ai_subject_sharpness
+
+        yolo_lock = threading.Lock()
+
+        def detect_item(item: ImageItem) -> ImageItem:
+            try:
+                img = self.image_loader.get_thumbnail(str(item.path), max_size=(400, 400))
+                if img is None:
+                    item.detection_box = None
+                    return item
+
+                with yolo_lock:
+                    _, box = compute_ai_subject_sharpness(None, img, yolo_model=yolo_model, return_box=True)
+
+                if box:
+                    try:
+                        thumb_w, thumb_h = img.size
+                        x1, y1, x2, y2 = box
+                        item.detection_box = (
+                            x1 / thumb_w,
+                            y1 / thumb_h,
+                            x2 / thumb_w,
+                            y2 / thumb_h
+                        )
+                    except Exception:
+                        item.detection_box = None
+                else:
+                    item.detection_box = None
+            except Exception:
+                item.detection_box = None
+            return item
+
+        with ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 2)) as executor:
+            completed = 0
+            for item in executor.map(detect_item, self.items):
+                completed += 1
+                self.save_item_record(item)
                 if cancel_event and cancel_event.is_set():
                     break
                 if progress_callback:
@@ -446,6 +543,8 @@ class CullingSession:
                         progress_callback(completed, len(self.items), item.filename)
                     except TypeError:
                         progress_callback(completed, len(self.items))
+
+        return [item for item in self.items if item.detection_box is not None]
 
     def scan_for_blur(
         self,
@@ -455,7 +554,8 @@ class CullingSession:
         tag_action: Optional[str] = "Blur",
         rating_action: Optional[int] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None,
-        cancel_event: Optional[threading.Event] = None
+        cancel_event: Optional[threading.Event] = None,
+        file_type_filter: Optional[str] = None
     ) -> List[ImageItem]:
         """
         Scan for Blur: Analyzes sharpness scores across all photos using selected method.
@@ -468,12 +568,13 @@ class CullingSession:
             return []
 
         blur_method = method or (self.db.get_blur_method() if self.db else "laplacian")
-        self.compute_sharpness_scores(method=blur_method, progress_callback=progress_callback, cancel_event=cancel_event)
+        self.compute_sharpness_scores(method=blur_method, progress_callback=progress_callback, cancel_event=cancel_event, file_type_filter=file_type_filter)
 
         if cancel_event and cancel_event.is_set():
             return []
 
-        sorted_items = sorted(self.items, key=lambda x: x.sharpness_score)
+        filtered_items = self._filter_items_by_file_type(file_type_filter)
+        sorted_items = sorted(filtered_items, key=lambda x: x.sharpness_score)
         cutoff_index = int(len(sorted_items) * (bottom_percentile / 100.0))
         cutoff_index = max(1, min(cutoff_index, len(sorted_items)))
 
@@ -519,7 +620,8 @@ class CullingSession:
         keeper_rating: Optional[int] = None,
         keeper_method: str = "sharpest",
         progress_callback: Optional[Callable[[int, int], None]] = None,
-        cancel_event: Optional[threading.Event] = None
+        cancel_event: Optional[threading.Event] = None,
+        file_type_filter: Optional[str] = None
     ) -> List[ImageItem]:
         """
         Scan for Duplicates: Detects duplicate, near-identical, or burst-shot photos.
@@ -532,9 +634,11 @@ class CullingSession:
         if cancel_event and cancel_event.is_set():
             return []
 
+        filtered_items = self._filter_items_by_file_type(file_type_filter)
+
         from .detectors.duplicate_detector import find_duplicates
         groups = find_duplicates(
-            self.items,
+            filtered_items,
             image_loader=self.image_loader,
             method=method,
             threshold=threshold,
@@ -547,9 +651,9 @@ class CullingSession:
 
         # Ensure sharpness scores are computed for sharpest-based keeper methods
         if keeper_method in ("sharpest", "ai_eye_focus"):
-            uncomputed = [item for item in self.items if item.sharpness_score == 0.0]
+            uncomputed = [item for item in filtered_items if item.sharpness_score == 0.0]
             if uncomputed:
-                self.compute_sharpness_scores(cancel_event=cancel_event)
+                self.compute_sharpness_scores(cancel_event=cancel_event, file_type_filter=file_type_filter)
 
         if cancel_event and cancel_event.is_set():
             return []

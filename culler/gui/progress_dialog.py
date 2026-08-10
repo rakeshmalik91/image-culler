@@ -27,7 +27,10 @@ class ProgressDialog(ctk.CTkToplevel):
 
         # Make modal dialog window
         self.transient(master)
-        self.grab_set()
+        try:
+            self.grab_set()
+        except Exception:
+            pass
 
         self.bind("<Escape>", lambda e: self._handle_cancel())
 

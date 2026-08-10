@@ -33,6 +33,10 @@ class ImageCanvasViewer(ctk.CTkFrame):
         self.crop_rect_id: Optional[int] = None
         self.on_confirm_crop_cb = None
 
+        # Subject Detection Box
+        self._detection_box: Optional[Tuple[float, float, float, float]] = None
+        self._detection_rect_id: Optional[int] = None
+
         self.canvas = tk.Canvas(self, bg="#1a1a1a", highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
 
@@ -111,11 +115,58 @@ class ImageCanvasViewer(ctk.CTkFrame):
             self.zoom_level = 1.0
             self.pan_x = 0.0
             self.pan_y = 0.0
+        self.clear_detection_box()
         self.redraw(force_resize=True)
 
     def clear(self):
         """Clear canvas viewer image (e.g. when 0 items match filter)."""
         self.set_image(None, preserve_zoom=False)
+
+    def set_detection_box(self, box: Optional[Tuple[float, float, float, float]]):
+        self._detection_box = box
+        self._draw_detection_rect()
+
+    def clear_detection_box(self):
+        self._detection_box = None
+        if self._detection_rect_id is not None:
+            self.canvas.delete(self._detection_rect_id)
+            self._detection_rect_id = None
+
+    def _draw_detection_rect(self):
+        if self._detection_rect_id is not None:
+            self.canvas.delete(self._detection_rect_id)
+            self._detection_rect_id = None
+
+        if not self._detection_box or self.current_pil_img is None:
+            return
+
+        nx1, ny1, nx2, ny2 = self._detection_box
+        canvas_w = self.canvas.winfo_width()
+        canvas_h = self.canvas.winfo_height()
+        if canvas_w <= 10 or canvas_h <= 10:
+            return
+
+        img_w, img_h = self.current_pil_img.size
+        ratio = min(canvas_w / img_w, canvas_h / img_h) * self.zoom_level
+        new_w = max(10, int(img_w * ratio))
+        new_h = max(10, int(img_h * ratio))
+        center_x = (canvas_w / 2) + self.pan_x
+        center_y = (canvas_h / 2) + self.pan_y
+
+        x1 = nx1 * img_w
+        y1 = ny1 * img_h
+        x2 = nx2 * img_w
+        y2 = ny2 * img_h
+
+        cx1 = center_x - (new_w / 2) + (x1 * ratio)
+        cy1 = center_y - (new_h / 2) + (y1 * ratio)
+        cx2 = center_x - (new_w / 2) + (x2 * ratio)
+        cy2 = center_y - (new_h / 2) + (y2 * ratio)
+
+        self._detection_rect_id = self.canvas.create_rectangle(
+            cx1, cy1, cx2, cy2,
+            outline="#00ff00", width=3
+        )
 
     def redraw(self, force_resize: bool = False, fast_mode: bool = False):
         if self.current_pil_img is None:
@@ -145,6 +196,7 @@ class ImageCanvasViewer(ctk.CTkFrame):
         # update canvas item coordinates directly with hardware compositor (0ms CPU cost!)
         if not force_resize and self._last_rendered_state == state_key and self.canvas_img_id is not None:
             self.canvas.coords(self.canvas_img_id, center_x, center_y)
+            self._draw_detection_rect()
             return
 
         # Standard full-image resize with fast BILINEAR / NEAREST resampling
@@ -166,6 +218,8 @@ class ImageCanvasViewer(ctk.CTkFrame):
         else:
             self.canvas.delete("all")
             self.canvas_img_id = self.canvas.create_image(center_x, center_y, anchor="center", image=self.current_tk_img)
+
+        self._draw_detection_rect()
 
     def _on_drag_start(self, event):
         self.drag_start_x = event.x

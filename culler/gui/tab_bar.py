@@ -75,10 +75,10 @@ class TabBar(ctk.CTkFrame):
         )
         btn.pack(side="left", padx=(2, 0), pady=3)
 
-        btn.bind("<ButtonPress-1>", lambda e, i=idx: self._on_drag_start(e, i))
+        btn.bind("<ButtonPress-1>", self._on_drag_start)
         btn.bind("<B1-Motion>", self._on_drag_motion)
-        btn.bind("<ButtonRelease-1>", lambda e, i=idx: self._on_drag_release(e, i))
-        btn.bind("<ButtonPress-2>", lambda e, i=idx: self._handle_close(i))
+        btn.bind("<ButtonRelease-1>", self._on_drag_release)
+        btn.bind("<ButtonPress-2>", self._on_middle_click)
 
         close_btn = ctk.CTkButton(
             self._inner_frame,
@@ -89,8 +89,9 @@ class TabBar(ctk.CTkFrame):
             hover_color="#555555",
             text_color="#aaaaaa",
             font=ctk.CTkFont(size=9),
-            command=lambda i=idx: self._handle_close(i)
+            command=lambda cb=None: None  # Set below with current reference
         )
+        close_btn.configure(command=lambda cb=close_btn: self._handle_close_btn_click(cb))
         close_btn.pack(side="left", padx=(0, 4), pady=3)
 
         self._tab_buttons.append(btn)
@@ -128,7 +129,7 @@ class TabBar(ctk.CTkFrame):
         self._update_scroll_region()
 
     def set_active(self, index: int):
-        if not (0 <= index < self._tab_count) or index == self._active_index:
+        if not (0 <= index < self._tab_count):
             return
         self._active_index = index
         for i, b in enumerate(self._tab_buttons):
@@ -196,17 +197,39 @@ class TabBar(ctk.CTkFrame):
         if bbox:
             self._canvas.config(scrollregion=bbox)
 
+    def _get_index_for_widget(self, widget) -> int:
+        for idx, btn in enumerate(self._tab_buttons):
+            if btn == widget or any(child == widget for child in btn.winfo_children()):
+                return idx
+        for idx, cb in enumerate(self._close_buttons):
+            if cb == widget or any(child == widget for child in cb.winfo_children()):
+                return idx
+        return -1
+
+    def _handle_close_btn_click(self, close_btn: ctk.CTkButton):
+        if close_btn in self._close_buttons:
+            idx = self._close_buttons.index(close_btn)
+            self._handle_close(idx)
+
+    def _on_middle_click(self, event):
+        idx = self._get_index_for_widget(event.widget)
+        if idx >= 0:
+            self._handle_close(idx)
+
     def _handle_close(self, index: int):
-        if self.on_tab_closed:
+        if self.on_tab_closed and 0 <= index < self._tab_count:
             self.on_tab_closed(index)
 
     def _handle_new_tab(self):
         if self.on_new_tab:
             self.on_new_tab()
 
-    def _on_drag_start(self, event, index: int):
-        self._drag_source_idx = index
-        self._drag_over_idx = index
+    def _on_drag_start(self, event):
+        idx = self._get_index_for_widget(event.widget)
+        if idx < 0:
+            return
+        self._drag_source_idx = idx
+        self._drag_over_idx = idx
         self._drag_start_x = event.x_root
         self._drag_start_y = event.y_root
         self._did_drag = False
@@ -226,13 +249,13 @@ class TabBar(ctk.CTkFrame):
                 self._drag_over_idx = i
                 return
 
-    def _on_drag_release(self, event, index: int):
+    def _on_drag_release(self, event):
         if self._did_drag and self._drag_source_idx is not None and self._drag_over_idx is not None:
             if self._drag_source_idx != self._drag_over_idx and self.on_tab_reordered:
                 self.on_tab_reordered(self._drag_source_idx, self._drag_over_idx)
         elif not self._did_drag:
-            current_idx = self._tab_buttons.index(event.widget) if event.widget in self._tab_buttons else index
-            if self.on_tab_selected:
+            current_idx = self._get_index_for_widget(event.widget)
+            if current_idx >= 0 and self.on_tab_selected:
                 self.on_tab_selected(current_idx)
         self._drag_source_idx = None
         self._drag_over_idx = None

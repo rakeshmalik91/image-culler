@@ -15,16 +15,18 @@ class DuplicateScanDialog(ctk.CTkToplevel):
     def __init__(
         self,
         master,
-        on_run: Callable[[float, str, str, Optional[str], Optional[int]], None],
+        on_run: Callable[[float, str, str, Optional[str], Optional[int], str, str, Optional[str], Optional[int], str], None],
         initial_threshold: float = 6.0,
         initial_method: str = "dhash",
         initial_flag_action: str = "Reject",
         initial_tag_action: str = "Duplicate",
-        initial_rating_action: str = "None"
+        initial_rating_action: str = "None",
+        initial_file_type: str = "ARW"
     ):
         super().__init__(master)
         self.on_run = on_run
         self.selected_method = initial_method if initial_method in DUP_METHODS_DATA else "dhash"
+        self.selected_file_type = initial_file_type
         self.initial_flag_action = initial_flag_action
         self.initial_tag_action = initial_tag_action
         self.initial_rating_action = initial_rating_action
@@ -35,7 +37,10 @@ class DuplicateScanDialog(ctk.CTkToplevel):
 
         # Make modal dialog window
         self.transient(master)
-        self.grab_set()
+        try:
+            self.grab_set()
+        except Exception:
+            pass
 
         self.bind("<Escape>", lambda e: self.destroy())
 
@@ -293,6 +298,26 @@ class DuplicateScanDialog(ctk.CTkToplevel):
         self.combo_star.set(self.initial_rating_action)
         self.combo_star.pack(side="left")
 
+        # File Type Filter
+        f_filetype = ctk.CTkFrame(right_panel, corner_radius=6, fg_color="#1a1a1a", border_width=1, border_color="#333333")
+        f_filetype.pack(fill="x", pady=(6, 2))
+
+        lbl_filetype = ctk.CTkLabel(f_filetype, text="Scan File Type:", font=ctk.CTkFont(size=11, weight="bold"), text_color="#ffb703")
+        lbl_filetype.pack(anchor="w", padx=10, pady=(6, 4))
+
+        f_filetype_row = ctk.CTkFrame(f_filetype, fg_color="transparent")
+        f_filetype_row.pack(fill="x", padx=10, pady=(0, 6))
+
+        self.combo_filetype = ctk.CTkOptionMenu(
+            f_filetype_row,
+            values=["All", "ARW", "JPG"],
+            width=120,
+            height=26,
+            dynamic_resizing=False
+        )
+        self.combo_filetype.set(self.selected_file_type)
+        self.combo_filetype.pack(side="left")
+
         # Bottom Button Bar
         btn_bar = ctk.CTkFrame(self, fg_color="transparent")
         btn_bar.pack(side="bottom", fill="x", padx=20, pady=12)
@@ -373,6 +398,7 @@ class DuplicateScanDialog(ctk.CTkToplevel):
         thresh = float(self.slider_thresh.get())
         flag_act = self.combo_flag.get()
         tag_act = self.chk_tag_var.get() if self.chk_tag_var.get() else None
+        file_type = self.combo_filetype.get()
         
         star_str = self.combo_star.get()
         rating_act: Optional[int] = None
@@ -415,7 +441,7 @@ class DuplicateScanDialog(ctk.CTkToplevel):
             pass
 
         if self.on_run:
-            self.on_run(thresh, self.selected_method, flag_act, tag_act, rating_act, keeper_flag, keeper_tag, keeper_rating, keeper_method)
+            self.on_run(thresh, self.selected_method, flag_act, tag_act, rating_act, keeper_flag, keeper_tag, keeper_rating, keeper_method, file_type)
 
         try:
             if self.master:

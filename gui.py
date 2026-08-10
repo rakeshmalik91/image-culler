@@ -61,6 +61,15 @@ class ImageCullerApp(ctk.CTk):
         # Restore open tabs from DB (lazy loads all except active)
         self._restore_tabs_state()
 
+        # Force a full render pass so the active tab color is painted
+        # before mainloop() starts. Without this, CustomTkinter may show
+        # unrendered grey boxes until the first after() callback fires.
+        self.update_idletasks()
+        try:
+            self.update()
+        except Exception:
+            pass
+
     def _get_active_tab(self) -> Optional[Dict[str, Any]]:
         if 0 <= self.active_tab_index < len(self.tabs):
             return self.tabs[self.active_tab_index]
@@ -97,6 +106,9 @@ class ImageCullerApp(ctk.CTk):
             "selected_indices": set(),
             "selection_anchor_idx": 0,
             "is_loaded": False,
+            "loading": False,
+            "load_total": 0,
+            "load_current": 0,
         }
 
     def _restore_tabs_state(self):
@@ -118,7 +130,7 @@ class ImageCullerApp(ctk.CTk):
             if not directory or not os.path.exists(directory):
                 continue
             tab_info = self._create_tab_info(directory)
-            tab_info["tab_label"] = t.get("tab_label", tab_info["tab_label"])
+            tab_info["tab_label"] = t.get("tab_label", tab_info["tab_label"]).replace(" ⟳", "")
             tab_info["filter_values"] = t.get("filter_values", tab_info["filter_values"])
             tab_info["is_loaded"] = False
             restored_tabs.append(tab_info)
@@ -134,10 +146,23 @@ class ImageCullerApp(ctk.CTk):
             self.tab_bar.add_tab(t["tab_label"])
 
         self.tab_bar.set_active(active_idx)
+        self.tab_bar.update_idletasks()
+        try:
+            self.tab_bar.update()
+        except Exception:
+            pass
 
         # Lazy load: only load active tab on startup, others load on demand
         tab = self.tabs[active_idx]
         self._load_tab_directory(tab, show_progress=True)
+
+        # Re-assert active tab color after loading indicator may have updated label
+        def _restore_active_color():
+            self.tab_bar.set_active(self.active_tab_index)
+            self.tab_bar.update_idletasks()
+
+        self.after(1, _restore_active_color)
+        self.after(100, _restore_active_color)
 
     def _add_tab(self, directory: str):
         tab_info = self._create_tab_info(directory)
@@ -189,6 +214,7 @@ class ImageCullerApp(ctk.CTk):
         else:
             self._apply_tab_state(target)
 
+        self._sync_loading_progress()
         self._persist_tabs_state()
 
     def _apply_tab_state(self, tab: Dict[str, Any]):
@@ -221,53 +247,70 @@ class ImageCullerApp(ctk.CTk):
         if not directory or not os.path.exists(directory):
             return
 
-        if show_progress:
-            folder_name = tab["tab_label"]
-            prog_dialog = ProgressDialog(
-                self,
-                title_text="📂 Loading Directory Progress",
-                header_text=f"📂 Loading Photos ({folder_name})..."
-            )
+        tab["loading"] = True
+        tab["load_total"] = 0
+        tab["load_current"] = 0
+        tab["_placeholders_loaded"] = False
+        self._update_tab_loading_indicator(tab)
 
-            def on_progress(current: int, total: int, filename: str = ""):
-                if not prog_dialog.winfo_exists():
-                    return
-                self.after(0, lambda c=current, t=total, fn=filename: prog_dialog.update_progress(c, t, fn))
+        white_balance = self.toolbar.get_white_balance()
 
-            def worker():
-                try:
-                    tab["session"].scan_directory(
-                        directory,
-                        stack_raw_jpg=True,
-                        progress_callback=on_progress
-                    )
-                    tab["is_loaded"] = True
-                    self.after(0, lambda: self._on_tab_scan_complete(tab, prog_dialog))
-                except Exception as e:
-                    self.after(0, lambda err=e: self._on_tab_scan_error(err, prog_dialog))
+        def on_progress(current: int, total: int, filename: str = ""):
+            tab["load_current"] = current
+            tab["load_total"] = total
+            if tab is self._get_active_tab():
+                if current == 0 and total > 0 and not tab.get("_placeholders_loaded"):
+                    tab["_placeholders_loaded"] = True
+                    self.after(50, lambda: self._preload_placeholder_items(tab, white_balance))
+                self.after(0, self._sync_loading_progress)
 
-            threading.Thread(target=worker, daemon=True).start()
-        else:
-            def worker():
-                try:
-                    tab["session"].scan_directory(directory, stack_raw_jpg=True)
-                    tab["is_loaded"] = True
-                    self.after(0, lambda: self._on_tab_scan_complete(tab, None))
-                except Exception as e:
-                    self.after(0, lambda err=e: self._on_scan_error(err, None))
-            threading.Thread(target=worker, daemon=True).start()
-
-    def _on_tab_scan_complete(self, tab: Dict[str, Any], prog_dialog: Optional[ProgressDialog] = None):
-        if prog_dialog and prog_dialog.winfo_exists():
+        def worker():
             try:
-                prog_dialog.destroy()
-            except Exception:
-                pass
+                tab["session"].scan_directory(
+                    directory,
+                    stack_raw_jpg=True,
+                    progress_callback=on_progress
+                )
+                tab["is_loaded"] = True
+                tab["loading"] = False
+                self.after(0, lambda: self._on_tab_scan_complete(tab))
+            except Exception as e:
+                tab["loading"] = False
+                self.after(0, lambda err=e: self._on_tab_scan_error(tab, err))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _preload_placeholder_items(self, tab: Dict[str, Any], white_balance: str):
+        session = tab["session"]
+        if not session or not session.items:
+            return
+
+        placeholder_items = []
+        for item in session.items:
+            pi = ImageItem(item.path)
+            pi.filename = item.filename or item.path.name
+            pi.flag = item.flag
+            pi.rating = item.rating
+            pi.is_stacked = item.is_stacked
+            pi.stacked_paths = list(item.stacked_paths)
+            placeholder_items.append(pi)
+
+        self.thumb_list.set_image_loader(session.image_loader)
+        self.thumb_list.update_items(placeholder_items, selected_idx=0, white_balance=white_balance)
+
+    def _on_tab_scan_complete(self, tab: Dict[str, Any]):
+        self._update_tab_loading_indicator(tab)
+
+        session = tab["session"]
+        self._apply_tab_filter_values(tab)
 
         if tab is not self._get_active_tab():
             return
 
-        self.thumb_list.set_image_loader(tab["session"].image_loader)
+        self.thumb_list.progress_bar.set(0.0)
+        self.thumb_list.lbl_progress_text.configure(text="")
+
+        self.thumb_list.set_image_loader(session.image_loader)
         self._on_filter_changed()
         stats = tab["session"].get_summary_stats()
         if stats['total_images'] == 0:
@@ -279,13 +322,82 @@ class ImageCullerApp(ctk.CTk):
                 f"Picked: {stats['picked']}, Rejected: {stats['rejected']}, Unflagged: {stats['unflagged']}"
             )
 
-    def _on_tab_scan_error(self, err: Exception, prog_dialog: Optional[ProgressDialog] = None):
-        if prog_dialog and prog_dialog.winfo_exists():
-            try:
-                prog_dialog.destroy()
-            except Exception:
-                pass
+    def _on_tab_scan_error(self, tab: Dict[str, Any], err: Exception):
+        self._update_tab_loading_indicator(tab)
         self._update_status("Error loading directory.")
+
+    def _sync_loading_progress(self):
+        tab = self._get_active_tab()
+        if not tab or not tab.get("loading"):
+            return
+
+        total = tab.get("load_total", 0)
+        current = tab.get("load_current", 0)
+        if total > 0:
+            pct = current / total
+            self.thumb_list.progress_bar.set(pct)
+            self.thumb_list.lbl_progress_text.configure(text=f"Loading {current}/{total}")
+        else:
+            self.thumb_list.progress_bar.set(0.0)
+            self.thumb_list.lbl_progress_text.configure(text="Loading...")
+
+    def _update_tab_loading_indicator(self, tab: Dict[str, Any]):
+        idx = self.tabs.index(tab) if tab in self.tabs else -1
+        if idx < 0:
+            return
+        base_label = tab.get("tab_label", "")
+        if not base_label:
+            return
+        if tab.get("loading") and not base_label.endswith(" ⟳"):
+            tab["tab_label"] = base_label + " ⟳"
+        elif not tab.get("loading") and base_label.endswith(" ⟳"):
+            tab["tab_label"] = base_label[:-2]
+        self.tab_bar.set_label(idx, tab["tab_label"])
+
+    def _apply_tab_filter_values(self, tab: Dict[str, Any]):
+        session = tab["session"]
+        if not session or not session.items:
+            tab["current_items"] = []
+            tab["current_index"] = -1
+            return
+
+        filter_vals = tab.get("filter_values", {})
+
+        rating_selected = filter_vals.get("rating", [])
+        rating_filter_set = None
+        if rating_selected:
+            rating_filter_set = set()
+            for r_str in rating_selected:
+                if r_str == "Unrated":
+                    rating_filter_set.add(0)
+                else:
+                    try:
+                        rating_filter_set.add(int(r_str.replace("★", "").strip()))
+                    except Exception:
+                        pass
+
+        fmt_val = filter_vals.get("format", "All Formats")
+        if ".ARW" in fmt_val.upper() or "ARW" in fmt_val.upper():
+            fmt_val = ".ARW"
+        elif ".JPG" in fmt_val.upper() or "JPG" in fmt_val.upper():
+            fmt_val = ".JPG"
+        elif ".PNG" in fmt_val.upper() or "PNG" in fmt_val.upper():
+            fmt_val = ".PNG"
+        elif ".HEIC" in fmt_val.upper() or "HEIC" in fmt_val.upper():
+            fmt_val = ".HEIC"
+        else:
+            fmt_val = "All"
+
+        tag_selected = filter_vals.get("tag", [])
+        tag_filter = tag_selected if tag_selected else None
+
+        tab["current_items"] = session.get_filtered_items(
+            flag_filter=filter_vals.get("flag", "All"),
+            rating_filter=rating_filter_set,
+            format_filter=fmt_val,
+            tag_filter=tag_filter
+        )
+        tab["current_index"] = 0 if tab["current_items"] else -1
 
     def _persist_tabs_state(self):
         self._save_active_tab_state()
@@ -408,7 +520,7 @@ class ImageCullerApp(ctk.CTk):
 
         self.lbl_prefetch = ctk.CTkLabel(
             self.prefetch_frame,
-            text="⚡ RAM Cache Ready",
+            text="",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="#2b9348"
         )
@@ -549,20 +661,18 @@ class ImageCullerApp(ctk.CTk):
             "format": "All Formats",
             "tag": []
         }
+        tab["loading"] = True
+        tab["load_total"] = 0
+        tab["load_current"] = 0
 
-        self.tab_bar.set_label(self.active_tab_index, tab["tab_label"])
+        self.tab_bar.set_label(self.active_tab_index, tab["tab_label"] + " ⟳")
         self._update_status(f"Scanning directory: {folder_path}...")
 
-        prog_dialog = ProgressDialog(
-            self,
-            title_text="📂 Loading Directory Progress",
-            header_text=f"📂 Loading Photos ({tab['tab_label']})..."
-        )
-
         def on_progress(current: int, total: int, filename: str = ""):
-            if not prog_dialog.winfo_exists():
-                return
-            self.after(0, lambda c=current, t=total, fn=filename: prog_dialog.update_progress(c, t, fn))
+            tab["load_current"] = current
+            tab["load_total"] = total
+            if tab is self._get_active_tab():
+                self.after(0, self._sync_loading_progress)
 
         def worker():
             try:
@@ -572,42 +682,40 @@ class ImageCullerApp(ctk.CTk):
                     progress_callback=on_progress
                 )
                 tab["is_loaded"] = True
-                self.after(0, lambda: self._on_scan_complete(prog_dialog))
+                tab["loading"] = False
+                self.after(0, lambda: self._on_scan_complete(tab))
             except Exception as e:
-                self.after(0, lambda err=e: self._on_scan_error(err, prog_dialog))
+                tab["loading"] = False
+                self.after(0, lambda err=e: self._on_scan_error(tab, err))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_scan_complete(self, prog_dialog: Optional[ProgressDialog] = None):
-        if prog_dialog and prog_dialog.winfo_exists():
-            try:
-                prog_dialog.destroy()
-            except Exception:
-                pass
-        self._on_filter_changed()
-        tab = self._get_active_tab()
-        if tab:
-            stats = tab["session"].get_summary_stats()
-            if stats['total_images'] == 0:
-                folder_str = str(tab["session"].directory) if tab["session"].directory else "selected directory"
-                mb.showwarning(
-                    "No Photos Found",
-                    f"No supported photo files (.ARW, .JPG, .PNG, .HEIC, .CR2, .NEF, etc.) were found in:\n\n{folder_str}"
-                )
-                self._update_status(f"No supported photo files found in {folder_str}.")
-            else:
-                self._update_status(
-                    f"Loaded {stats['total_images']} photos ({stats['total_size_mb']} MB) | "
-                    f"Picked: {stats['picked']}, Rejected: {stats['rejected']}, Unflagged: {stats['unflagged']}"
-                )
+    def _on_scan_complete(self, tab: Dict[str, Any]):
+        self._update_tab_loading_indicator(tab)
 
-    def _on_scan_error(self, err: Exception, prog_dialog: Optional[ProgressDialog] = None):
-        if prog_dialog and prog_dialog.winfo_exists():
-            try:
-                prog_dialog.destroy()
-            except Exception:
-                pass
-        mb.showerror("Directory Scan Error", f"Failed to scan directory: {err}")
+        if tab is not self._get_active_tab():
+            return
+
+        self.thumb_list.progress_bar.set(0.0)
+        self.thumb_list.lbl_progress_text.configure(text="")
+
+        self._on_filter_changed()
+        stats = tab["session"].get_summary_stats()
+        if stats['total_images'] == 0:
+            folder_str = str(tab["session"].directory) if tab["session"].directory else "selected directory"
+            mb.showwarning(
+                "No Photos Found",
+                f"No supported photo files (.ARW, .JPG, .PNG, .HEIC, .CR2, .NEF, etc.) were found in:\n\n{folder_str}"
+            )
+            self._update_status(f"No supported photo files found in {folder_str}.")
+        else:
+            self._update_status(
+                f"Loaded {stats['total_images']} photos ({stats['total_size_mb']} MB) | "
+                f"Picked: {stats['picked']}, Rejected: {stats['rejected']}, Unflagged: {stats['unflagged']}"
+            )
+
+    def _on_scan_error(self, tab: Dict[str, Any], err: Exception):
+        self._update_tab_loading_indicator(tab)
         self._update_status("Error loading directory.")
 
     def _on_filter_changed(self, trigger_source: str = "filter"):
@@ -881,16 +989,18 @@ class ImageCullerApp(ctk.CTk):
     def _update_prefetch_progress(self, fraction: float, is_done: bool):
         self.prefetch_bar.set(fraction)
         if is_done:
-            self.lbl_prefetch.configure(text="⚡ RAM Cache Ready", text_color="#2b9348")
             self.prefetch_bar.configure(progress_color="#2b9348")
         else:
-            self.lbl_prefetch.configure(text="⚡ Prefetching...", text_color="#ffb703")
             self.prefetch_bar.configure(progress_color="#ffb703")
 
     def _on_image_loaded(self, item: ImageItem, pil_img: Optional[Image.Image], full_res: bool = False, active_path: Optional[Path] = None, req_id: Optional[int] = None):
         if req_id is not None and req_id != self._load_request_id:
             return
         self.viewer.set_image(pil_img)
+        if getattr(item, 'detection_box', None):
+            self.viewer.set_detection_box(item.detection_box)
+        else:
+            self.viewer.clear_detection_box()
         self.meta_panel.update_metadata(item)
         res_str = "100% Full Resolution" if full_res else "Preview"
         display_name = active_path.name if active_path else item.filename
@@ -1076,6 +1186,7 @@ class ImageCullerApp(ctk.CTk):
         init_flag = self.db.get_blur_flag_action()
         init_tag = self.db.get_blur_tag_action()
         init_star = self.db.get_blur_rating_action()
+        init_subject = self.db.get_blur_subject_detect()
 
         BlurScanDialog(
             self,
@@ -1084,7 +1195,9 @@ class ImageCullerApp(ctk.CTk):
             initial_method=init_method,
             initial_flag_action=init_flag,
             initial_tag_action=init_tag,
-            initial_rating_action=init_star
+            initial_rating_action=init_star,
+            initial_file_type="ARW",
+            initial_subject_detect=init_subject
         )
 
     def _run_blur_scan(
@@ -1093,15 +1206,21 @@ class ImageCullerApp(ctk.CTk):
         method: str,
         flag_action: str = "Reject",
         tag_action: Optional[str] = "Blur",
-        rating_action: Optional[int] = None
+        rating_action: Optional[int] = None,
+        file_type_filter: str = "ARW",
+        subject_detect: bool = False
     ):
         self.db.set_blur_method(method)
         self.db.set_blur_percentile(bottom_percentile)
         self.db.set_blur_flag_action(flag_action)
         self.db.set_blur_tag_action(tag_action or "")
         self.db.set_blur_rating_action(f"{rating_action} Star{'s' if rating_action and rating_action > 1 else ''}" if rating_action is not None else "None")
+        self.db.set_blur_subject_detect(subject_detect)
 
-        self._update_status(f"Scanning directory for blurry photos (Method: {method}, Cutoff: {int(bottom_percentile)}%)...")
+        status_msg = f"Scanning directory for blurry photos (Method: {method}, Cutoff: {int(bottom_percentile)}%)"
+        if subject_detect:
+            status_msg += " + Subject Detection"
+        self._update_status(status_msg)
 
         cancel_event = threading.Event()
 
@@ -1126,15 +1245,27 @@ class ImageCullerApp(ctk.CTk):
                 flag_action=flag_action,
                 tag_action=tag_action,
                 rating_action=rating_action,
+                file_type_filter=file_type_filter,
                 progress_callback=progress_cb,
                 cancel_event=cancel_event
             )
+            if not cancel_event.is_set() and subject_detect:
+                prog_dialog.lbl_header.configure(text="🎯 Detecting subjects with YOLO...")
+                prog_dialog.lbl_item.configure(text="Detecting subjects...")
+                prog_dialog.progress_bar.set(0.0)
+
+                def subject_progress_cb(completed: int, total: int, fn: str = ""):
+                    if not prog_dialog.is_cancelled:
+                        self.after(0, lambda c=completed, t=total, f=fn: prog_dialog.update_progress(c, t, f))
+
+                session.detect_subjects(progress_callback=subject_progress_cb, cancel_event=cancel_event)
+
             if not cancel_event.is_set():
-                self.after(0, lambda: self._on_scan_blur_complete(len(flagged), prog_dialog))
+                self.after(0, lambda: self._on_scan_blur_complete(len(flagged), prog_dialog, subject_detect=subject_detect))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_scan_blur_complete(self, count: int, prog_dialog: Optional[ProgressDialog] = None):
+    def _on_scan_blur_complete(self, count: int, prog_dialog: Optional[ProgressDialog] = None, subject_detect: bool = False):
         if prog_dialog and prog_dialog.winfo_exists():
             try:
                 prog_dialog.destroy()
@@ -1145,6 +1276,13 @@ class ImageCullerApp(ctk.CTk):
             mb.showinfo("Scan for Blur Complete", f"Identified {count} blurry photos and applied configured actions.")
         else:
             self._update_status("Blur scan complete — no blurry photos found.")
+
+        if subject_detect and self.current_items and 0 <= self.current_index < len(self.current_items):
+            cur_item = self.current_items[self.current_index]
+            if cur_item.detection_box:
+                self.viewer.set_detection_box(cur_item.detection_box)
+            else:
+                self.viewer.clear_detection_box()
 
     def _on_scan_duplicates(self):
         session = self._get_active_session()
@@ -1178,7 +1316,8 @@ class ImageCullerApp(ctk.CTk):
         keeper_flag: str = "Pick",
         keeper_tag: Optional[str] = None,
         keeper_rating: Optional[int] = None,
-        keeper_method: str = "sharpest"
+        keeper_method: str = "sharpest",
+        file_type_filter: str = "ARW"
     ):
         self.db.set_duplicate_method(method)
         self.db.set_duplicate_threshold(threshold)
@@ -1215,6 +1354,7 @@ class ImageCullerApp(ctk.CTk):
                 keeper_tag=keeper_tag,
                 keeper_rating=keeper_rating,
                 keeper_method=keeper_method,
+                file_type_filter=file_type_filter,
                 progress_callback=progress_cb,
                 cancel_event=cancel_event
             )
@@ -1273,11 +1413,12 @@ class ImageCullerApp(ctk.CTk):
         if not session or not session.items:
             return
 
-        ans = mb.askyesno("Clear All Metadata", "Are you sure you want to reset Flags, Tags, AND Star Ratings for ALL photos?")
+        ans = mb.askyesno("Clear All Metadata", "Are you sure you want to reset Flags, Tags, Star Ratings, AND Subject Bounding Boxes for ALL photos?")
         if ans:
             count = session.clear_all_metadata()
+            self.viewer.clear_detection_box()
             self._on_filter_changed()
-            self._update_status(f"Cleared flags, tags, and ratings across {count} photos.")
+            self._update_status(f"Cleared flags, tags, ratings, and subject bounding boxes across {count} photos.")
 
     def _on_trigger_crop(self):
         if self.current_index < 0 or not self.current_items:
