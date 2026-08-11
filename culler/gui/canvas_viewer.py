@@ -115,32 +115,43 @@ class ImageCanvasViewer(ctk.CTkFrame):
             self.zoom_level = 1.0
             self.pan_x = 0.0
             self.pan_y = 0.0
-        self.clear_detection_box()
         self.redraw(force_resize=True)
 
     def clear(self):
         """Clear canvas viewer image (e.g. when 0 items match filter)."""
+        self.clear_detection_box()
         self.set_image(None, preserve_zoom=False)
 
-    def set_detection_box(self, box: Optional[Tuple[float, float, float, float]]):
+    def set_detection_box(
+        self,
+        box: Optional[Tuple[float, float, float, float]],
+        eye_box: Optional[Tuple[float, float, float, float]] = None
+    ):
         self._detection_box = box
+        self._eye_box = getattr(self, "_eye_box", None) if eye_box is None and box is None else eye_box
         self._draw_detection_rect()
 
     def clear_detection_box(self):
         self._detection_box = None
-        if self._detection_rect_id is not None:
+        self._eye_box = None
+        if getattr(self, "_detection_rect_id", None) is not None:
             self.canvas.delete(self._detection_rect_id)
             self._detection_rect_id = None
+        if getattr(self, "_eye_rect_id", None) is not None:
+            self.canvas.delete(self._eye_rect_id)
+            self._eye_rect_id = None
 
     def _draw_detection_rect(self):
-        if self._detection_rect_id is not None:
+        if getattr(self, "_detection_rect_id", None) is not None:
             self.canvas.delete(self._detection_rect_id)
             self._detection_rect_id = None
+        if getattr(self, "_eye_rect_id", None) is not None:
+            self.canvas.delete(self._eye_rect_id)
+            self._eye_rect_id = None
 
-        if not self._detection_box or self.current_pil_img is None:
+        if self.current_pil_img is None:
             return
 
-        nx1, ny1, nx2, ny2 = self._detection_box
         canvas_w = self.canvas.winfo_width()
         canvas_h = self.canvas.winfo_height()
         if canvas_w <= 10 or canvas_h <= 10:
@@ -153,20 +164,34 @@ class ImageCanvasViewer(ctk.CTkFrame):
         center_x = (canvas_w / 2) + self.pan_x
         center_y = (canvas_h / 2) + self.pan_y
 
-        x1 = nx1 * img_w
-        y1 = ny1 * img_h
-        x2 = nx2 * img_w
-        y2 = ny2 * img_h
+        # Draw Level 1 Subject Box (Green)
+        if self._detection_box:
+            nx1, ny1, nx2, ny2 = self._detection_box
+            x1, y1 = nx1 * img_w, ny1 * img_h
+            x2, y2 = nx2 * img_w, ny2 * img_h
+            cx1 = center_x - (new_w / 2) + (x1 * ratio)
+            cy1 = center_y - (new_h / 2) + (y1 * ratio)
+            cx2 = center_x - (new_w / 2) + (x2 * ratio)
+            cy2 = center_y - (new_h / 2) + (y2 * ratio)
+            self._detection_rect_id = self.canvas.create_rectangle(
+                cx1, cy1, cx2, cy2,
+                outline="#00ff00", width=3
+            )
 
-        cx1 = center_x - (new_w / 2) + (x1 * ratio)
-        cy1 = center_y - (new_h / 2) + (y1 * ratio)
-        cx2 = center_x - (new_w / 2) + (x2 * ratio)
-        cy2 = center_y - (new_h / 2) + (y2 * ratio)
-
-        self._detection_rect_id = self.canvas.create_rectangle(
-            cx1, cy1, cx2, cy2,
-            outline="#00ff00", width=3
-        )
+        # Draw Level 2 Head/Eye Box (Gold)
+        eye_b = getattr(self, "_eye_box", None)
+        if eye_b:
+            ex1_n, ey1_n, ex2_n, ey2_n = eye_b
+            ex1, ey1 = ex1_n * img_w, ey1_n * img_h
+            ex2, ey2 = ex2_n * img_w, ey2_n * img_h
+            ecx1 = center_x - (new_w / 2) + (ex1 * ratio)
+            ecy1 = center_y - (new_h / 2) + (ey1 * ratio)
+            ecx2 = center_x - (new_w / 2) + (ex2 * ratio)
+            ecy2 = center_y - (new_h / 2) + (ey2 * ratio)
+            self._eye_rect_id = self.canvas.create_rectangle(
+                ecx1, ecy1, ecx2, ecy2,
+                outline="#ffb703", width=2
+            )
 
     def redraw(self, force_resize: bool = False, fast_mode: bool = False):
         if self.current_pil_img is None:
@@ -240,6 +265,7 @@ class ImageCanvasViewer(ctk.CTkFrame):
         center_y = (canvas_h / 2) + self.pan_y
         if self.canvas_img_id is not None:
             self.canvas.coords(self.canvas_img_id, center_x, center_y)
+            self._draw_detection_rect()
         else:
             self.redraw(force_resize=False)
 
@@ -410,6 +436,7 @@ class ImageCanvasViewer(ctk.CTkFrame):
             center_y = (canvas_h / 2) + self.pan_y
             if self.canvas_img_id is not None:
                 self.canvas.coords(self.canvas_img_id, center_x, center_y)
+                self._draw_detection_rect()
             else:
                 self.redraw(force_resize=False)
 

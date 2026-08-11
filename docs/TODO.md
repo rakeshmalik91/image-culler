@@ -1,0 +1,9 @@
+- [x] mark keeper tag as "Duplicate" too by default, not "Keeper", make stars configurable for keeper too
+- [x] remove the custom tag button on right panel, in settings create a new tab to manage tags
+- [x] for duplicate add feature for keeper selection methods. 
+- [x] add a keeper selection method specific for bird/wildlife, based on eye sharpness
+- [x] add support for multiselect in tag & rating filter
+- [x] add refresh button beside open folder (use icon, no text)
+- [x] add support for multiple tabs. add new tab or open new folder should add a new tab. remove existing open folder button. should be able to reorder tabs. if multiple tabs are open, on releaunch should restore all tabs. on relaunch, current active tab should be show all data, other tabs data should be lazy loaded. once loaded other moving to other tabs should be seemless, should not trigger lazy load again. each tab should have its own independent filter settings. 
+- [x] while loading thumbnails, load RAW first then JPG or anything else, they take long and block RAW thumbnails
+- [x] add an option for safe blur scan, it will check for loose duplicates, and mark for reject only if another non blurry or less blurry version of the image is present

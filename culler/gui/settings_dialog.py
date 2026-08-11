@@ -87,8 +87,8 @@ class SettingsDialog(ctk.CTkToplevel):
             btn_bar,
             text="Cancel",
             width=90,
-            fg_color="#4a4e69",
-            hover_color="#22223b",
+            fg_color="#1f538d",
+            hover_color="#14375e",
             command=self.destroy
         )
         btn_cancel.pack(side="right", padx=4)
@@ -197,6 +197,34 @@ class SettingsDialog(ctk.CTkToplevel):
         )
         self.opt_wb.set(wb_str_default)
         self.opt_wb.pack(side="left")
+
+        # Eye Detection Method dropdown
+        f_eye = ctk.CTkFrame(container, fg_color="transparent")
+        f_eye.pack(fill="x", pady=2)
+        lbl_eye = ctk.CTkLabel(f_eye, text="Eye Detection Method:", width=150, anchor="w")
+        lbl_eye.pack(side="left")
+
+        init_eye = self.db.get_eye_detection_method()
+        eye_opts = [
+            "YOLO AI (Pose / Keypoints)",
+            "Simple Hybrid (Haar + Geometry)"
+        ]
+        eye_display_map = {
+            "yolo": "YOLO AI (Pose / Keypoints)",
+            "auto": "YOLO AI (Pose / Keypoints)",
+            "simple": "Simple Hybrid (Haar + Geometry)",
+            "haar": "Simple Hybrid (Haar + Geometry)",
+            "mediapipe": "Simple Hybrid (Haar + Geometry)",
+            "geometry": "Simple Hybrid (Haar + Geometry)"
+        }
+
+        self.opt_eye = ctk.CTkOptionMenu(
+            f_eye,
+            values=eye_opts,
+            width=230
+        )
+        self.opt_eye.set(eye_display_map.get(init_eye, "YOLO AI (Pose / Keypoints)"))
+        self.opt_eye.pack(side="left")
 
         # Separator line
         sep2 = ctk.CTkFrame(container, height=1, fg_color="#333333")
@@ -431,6 +459,14 @@ class SettingsDialog(ctk.CTkToplevel):
         # 3. White balance
         wb_str = "auto" if "Auto" in self.opt_wb.get() else "camera"
         self.db.set_white_balance(wb_str)
+
+        # 3b. Eye detection method
+        eye_display = {
+            "YOLO AI (Pose / Keypoints)": "yolo",
+            "Simple Hybrid (Haar + Geometry)": "simple"
+        }
+        eye_val = eye_display.get(self.opt_eye.get(), "yolo")
+        self.db.set_eye_detection_method(eye_val)
 
         # 4. Stack RAW+JPG
         self.db.set_stack_raw_jpg(bool(self.chk_stack.get()))

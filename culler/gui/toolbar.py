@@ -42,7 +42,31 @@ class MultiSelectDropdown(ctk.CTkFrame):
             command=self._toggle_popup,
             anchor="w"
         )
-        self.btn.pack(fill="x")
+        self.btn.pack(fill="x", expand=True)
+
+        self.btn_clear = ctk.CTkButton(
+            self.btn,
+            text="✕",
+            width=18,
+            height=18,
+            fg_color="transparent",
+            hover_color="#d90429",
+            text_color="#ffffff",
+            font=ctk.CTkFont(size=9, weight="bold"),
+            corner_radius=9,
+            command=self.clear_selection
+        )
+        ToolTip(self.btn_clear, "Clear selection")
+
+    def clear_selection(self):
+        """Clear all selected items and reset filter to default 'All' state."""
+        self._selected.clear()
+        if hasattr(self, "_chk_vars"):
+            for var in self._chk_vars.values():
+                var.set(False)
+        self._update_label()
+        if self.on_change:
+            self.on_change()
 
     def _toggle_popup(self):
         if self._popup and self._popup.winfo_exists():
@@ -58,12 +82,40 @@ class MultiSelectDropdown(ctk.CTkFrame):
         MultiSelectDropdown._active_instance = self
 
         # Position below the button
-        x = self.btn.winfo_rootx()
-        y = self.btn.winfo_rooty() + self.btn.winfo_height() + 2
+        x = self.winfo_rootx()
+        y = self.winfo_rooty() + self.winfo_height() + 2
         self._popup.geometry(f"+{x}+{y}")
 
         popup_frame = ctk.CTkFrame(self._popup, corner_radius=6, fg_color="#2a2a2a", border_width=1, border_color="#555555")
         popup_frame.pack(fill="both", expand=True, padx=0, pady=0)
+
+        # Popup Header with Clear Button
+        header_frame = ctk.CTkFrame(popup_frame, fg_color="transparent")
+        header_frame.pack(fill="x", padx=6, pady=(4, 2))
+
+        lbl_hdr = ctk.CTkLabel(
+            header_frame,
+            text="Select Options:",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color="#aaaaaa"
+        )
+        lbl_hdr.pack(side="left", padx=(2, 0))
+
+        btn_popup_clear = ctk.CTkButton(
+            header_frame,
+            text="🧹 Clear",
+            width=55,
+            height=22,
+            fg_color="#3a3a3a",
+            hover_color="#d90429",
+            text_color="#ffffff",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            command=self.clear_selection
+        )
+        btn_popup_clear.pack(side="right")
+
+        sep = ctk.CTkFrame(popup_frame, height=1, fg_color="#444444")
+        sep.pack(fill="x", padx=4, pady=(2, 4))
 
         self._chk_vars: Dict[str, ctk.BooleanVar] = {}
         for val in self.values:
@@ -109,10 +161,10 @@ class MultiSelectDropdown(ctk.CTkFrame):
             pw = inst._popup.winfo_width()
             ph = inst._popup.winfo_height()
 
-            bx = inst.btn.winfo_rootx()
-            by = inst.btn.winfo_rooty()
-            bw = inst.btn.winfo_width()
-            bh = inst.btn.winfo_height()
+            bx = inst.winfo_rootx()
+            by = inst.winfo_rooty()
+            bw = inst.winfo_width()
+            bh = inst.winfo_height()
 
             rx = event.x_root
             ry = event.y_root
@@ -148,12 +200,17 @@ class MultiSelectDropdown(ctk.CTkFrame):
     def _update_label(self):
         if not self._selected:
             self.btn.configure(text=self.all_label)
-        elif len(self._selected) == 1:
-            self.btn.configure(text=next(iter(self._selected)))
-        elif len(self._selected) <= 2:
-            self.btn.configure(text=", ".join(sorted(self._selected)))
+            if hasattr(self, "btn_clear"):
+                self.btn_clear.place_forget()
         else:
-            self.btn.configure(text=f"{len(self._selected)} selected")
+            if hasattr(self, "btn_clear"):
+                self.btn_clear.place(relx=1.0, rely=0.5, anchor="e", x=-4)
+            if len(self._selected) == 1:
+                self.btn.configure(text=next(iter(self._selected)))
+            elif len(self._selected) <= 2:
+                self.btn.configure(text=", ".join(sorted(self._selected)))
+            else:
+                self.btn.configure(text=f"{len(self._selected)} selected")
 
     def get_selected(self) -> List[str]:
         """Return list of selected values, or empty list for 'All'."""
@@ -168,8 +225,7 @@ class MultiSelectDropdown(ctk.CTkFrame):
 
     def reset(self):
         """Reset to 'All' state."""
-        self._selected.clear()
-        self._update_label()
+        self.clear_selection()
 
 
 class HeaderToolbar(ctk.CTkFrame):
@@ -256,9 +312,9 @@ class HeaderToolbar(ctk.CTkFrame):
             values=["All Formats", ".ARW", ".JPG", ".PNG", ".HEIC"],
             command=lambda v: self.on_filter_change("filter"),
             width=95,
-            fg_color="#3a86ff",
-            button_color="#2b6cb0",
-            button_hover_color="#03045e",
+            fg_color="#1f538d",
+            button_color="#14375e",
+            button_hover_color="#0d233a",
             text_color="#ffffff"
         )
         self.opt_format.set("All Formats")
@@ -269,8 +325,8 @@ class HeaderToolbar(ctk.CTkFrame):
             self,
             text="🔍",
             width=40,
-            fg_color="#e63946",
-            hover_color="#d62828",
+            fg_color="#1f538d",
+            hover_color="#14375e",
             font=ctk.CTkFont(weight="bold"),
             command=self.on_load_100_percent
         )
@@ -293,9 +349,9 @@ class HeaderToolbar(ctk.CTkFrame):
             values=["10%", "15%", "20%", "25%", "50%", "100%"],
             command=lambda v: self.on_raw_settings_change(),
             width=80,
-            fg_color="#2b9348",
-            button_color="#1b4332",
-            button_hover_color="#081c15"
+            fg_color="#1f538d",
+            button_color="#14375e",
+            button_hover_color="#0d233a"
         )
         self.opt_raw_scale.set(scale_default_str)
         self.opt_raw_scale.pack(side="left", padx=3)
@@ -310,9 +366,9 @@ class HeaderToolbar(ctk.CTkFrame):
             values=["Camera", "Auto"],
             command=lambda v: self.on_raw_settings_change(),
             width=85,
-            fg_color="#3a86ff",
-            button_color="#0077b6",
-            button_hover_color="#03045e"
+            fg_color="#1f538d",
+            button_color="#14375e",
+            button_hover_color="#0d233a"
         )
         self.opt_wb.set(wb_default_str)
         self.opt_wb.pack(side="left", padx=3)
@@ -322,8 +378,8 @@ class HeaderToolbar(ctk.CTkFrame):
             self,
             text="🔍 Scan for Blur",
             width=110,
-            fg_color="#7b2cbf",
-            hover_color="#5a189a",
+            fg_color="#1f538d",
+            hover_color="#14375e",
             font=ctk.CTkFont(weight="bold"),
             command=self.on_scan_blur
         )
@@ -335,8 +391,8 @@ class HeaderToolbar(ctk.CTkFrame):
             self,
             text="👯 Scan for Duplicates",
             width=135,
-            fg_color="#d97706",
-            hover_color="#b45309",
+            fg_color="#1f538d",
+            hover_color="#14375e",
             font=ctk.CTkFont(weight="bold"),
             command=self.on_scan_duplicates
         )
@@ -364,8 +420,8 @@ class HeaderToolbar(ctk.CTkFrame):
                 text="🔄",
                 width=40,
                 command=self.on_refresh,
-                fg_color="#4a4e69",
-                hover_color="#22223b"
+                fg_color="#1f538d",
+                hover_color="#14375e"
             )
             self.btn_refresh.pack(side="right", padx=4)
             ToolTip(self.btn_refresh, "Refresh current directory")
@@ -377,8 +433,8 @@ class HeaderToolbar(ctk.CTkFrame):
                 text="📂",
                 width=40,
                 command=self.on_open_explorer,
-                fg_color="#4a4e69",
-                hover_color="#22223b"
+                fg_color="#1f538d",
+                hover_color="#14375e"
             )
             self.btn_explorer.pack(side="right", padx=4)
             ToolTip(self.btn_explorer, "Open current photo folder in OS File Explorer / Finder")

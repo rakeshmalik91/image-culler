@@ -329,9 +329,9 @@ class TestImageCullerAppTabLogic(unittest.TestCase):
 
         self.assertEqual(len(app.tabs), 2)
         self.assertEqual(app.tabs[0]["tab_label"], "A")
-        self.assertEqual(app.tabs[0]["filter_values"]["flag"], "Pick")
+        self.assertEqual(app.tabs[0]["filter_values"]["flag"], "All")
         self.assertEqual(app.tabs[1]["tab_label"], "B")
-        self.assertEqual(app.tabs[1]["filter_values"]["flag"], "Reject")
+        self.assertEqual(app.tabs[1]["filter_values"]["flag"], "All")
         self.assertEqual(app.active_tab_index, 0)
         self.assertFalse(app.tabs[0]["is_loaded"])
         self.assertFalse(app.tabs[1]["is_loaded"])

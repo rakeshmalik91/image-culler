@@ -131,7 +131,10 @@ class ImageCullerApp(ctk.CTk):
                 continue
             tab_info = self._create_tab_info(directory)
             tab_info["tab_label"] = t.get("tab_label", tab_info["tab_label"]).replace(" ⟳", "")
-            tab_info["filter_values"] = t.get("filter_values", tab_info["filter_values"])
+            saved_filters = t.get("filter_values", tab_info["filter_values"])
+            if isinstance(saved_filters, dict):
+                saved_filters["flag"] = "All"
+            tab_info["filter_values"] = saved_filters
             tab_info["is_loaded"] = False
             restored_tabs.append(tab_info)
 
@@ -997,8 +1000,8 @@ class ImageCullerApp(ctk.CTk):
         if req_id is not None and req_id != self._load_request_id:
             return
         self.viewer.set_image(pil_img)
-        if getattr(item, 'detection_box', None):
-            self.viewer.set_detection_box(item.detection_box)
+        if getattr(item, 'detection_box', None) or getattr(item, 'eye_box', None):
+            self.viewer.set_detection_box(item.detection_box, item.eye_box)
         else:
             self.viewer.clear_detection_box()
         self.meta_panel.update_metadata(item)
@@ -1187,6 +1190,9 @@ class ImageCullerApp(ctk.CTk):
         init_tag = self.db.get_blur_tag_action()
         init_star = self.db.get_blur_rating_action()
         init_subject = self.db.get_blur_subject_detect()
+        init_safe_blur = self.db.get_safe_blur_scan()
+        init_clear = self.db.get_clear_before_scan()
+        init_eye = self.db.get_eye_detection_method()
 
         BlurScanDialog(
             self,
@@ -1197,7 +1203,10 @@ class ImageCullerApp(ctk.CTk):
             initial_tag_action=init_tag,
             initial_rating_action=init_star,
             initial_file_type="ARW",
-            initial_subject_detect=init_subject
+            initial_subject_detect=init_subject,
+            initial_safe_blur=init_safe_blur,
+            initial_clear_before_scan=init_clear,
+            initial_eye_detection_method=init_eye
         )
 
     def _run_blur_scan(
@@ -1208,7 +1217,10 @@ class ImageCullerApp(ctk.CTk):
         tag_action: Optional[str] = "Blur",
         rating_action: Optional[int] = None,
         file_type_filter: str = "ARW",
-        subject_detect: bool = False
+        subject_detect: bool = False,
+        safe_blur: bool = True,
+        clear_before_scan: bool = True,
+        eye_detection_method: str = "auto"
     ):
         self.db.set_blur_method(method)
         self.db.set_blur_percentile(bottom_percentile)
@@ -1216,10 +1228,20 @@ class ImageCullerApp(ctk.CTk):
         self.db.set_blur_tag_action(tag_action or "")
         self.db.set_blur_rating_action(f"{rating_action} Star{'s' if rating_action and rating_action > 1 else ''}" if rating_action is not None else "None")
         self.db.set_blur_subject_detect(subject_detect)
+        self.db.set_safe_blur_scan(safe_blur)
+        self.db.set_clear_before_scan(clear_before_scan)
+        self.db.set_eye_detection_method(eye_detection_method)
+
+        if clear_before_scan:
+            session = self._get_active_session()
+            if session and session.items:
+                session.clear_all_metadata()
 
         status_msg = f"Scanning directory for blurry photos (Method: {method}, Cutoff: {int(bottom_percentile)}%)"
         if subject_detect:
             status_msg += " + Subject Detection"
+        if safe_blur:
+            status_msg += " [Safe Mode]"
         self._update_status(status_msg)
 
         cancel_event = threading.Event()
@@ -1247,40 +1269,37 @@ class ImageCullerApp(ctk.CTk):
                 rating_action=rating_action,
                 file_type_filter=file_type_filter,
                 progress_callback=progress_cb,
-                cancel_event=cancel_event
+                cancel_event=cancel_event,
+                subject_detect=subject_detect,
+                safe_mode=safe_blur
             )
-            if not cancel_event.is_set() and subject_detect:
-                prog_dialog.lbl_header.configure(text="🎯 Detecting subjects with YOLO...")
-                prog_dialog.lbl_item.configure(text="Detecting subjects...")
-                prog_dialog.progress_bar.set(0.0)
-
-                def subject_progress_cb(completed: int, total: int, fn: str = ""):
-                    if not prog_dialog.is_cancelled:
-                        self.after(0, lambda c=completed, t=total, f=fn: prog_dialog.update_progress(c, t, f))
-
-                session.detect_subjects(progress_callback=subject_progress_cb, cancel_event=cancel_event)
 
             if not cancel_event.is_set():
-                self.after(0, lambda: self._on_scan_blur_complete(len(flagged), prog_dialog, subject_detect=subject_detect))
+                self.after(0, lambda: self._on_scan_blur_complete(len(flagged), prog_dialog, subject_detect=subject_detect, tag_action=tag_action))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_scan_blur_complete(self, count: int, prog_dialog: Optional[ProgressDialog] = None, subject_detect: bool = False):
+    def _on_scan_blur_complete(self, count: int, prog_dialog: Optional[ProgressDialog] = None, subject_detect: bool = False, tag_action: Optional[str] = "Blur"):
         if prog_dialog and prog_dialog.winfo_exists():
             try:
                 prog_dialog.destroy()
             except Exception:
                 pass
+        self.toolbar.seg_filter.set("All")
+        if tag_action:
+            self.toolbar.tag_filter.reset()
+            self.toolbar.tag_filter._selected.add(tag_action)
+            self.toolbar.tag_filter._update_label()
+        self._on_filter_changed()
         if count > 0:
-            self._on_filter_changed()
             mb.showinfo("Scan for Blur Complete", f"Identified {count} blurry photos and applied configured actions.")
         else:
             self._update_status("Blur scan complete — no blurry photos found.")
 
         if subject_detect and self.current_items and 0 <= self.current_index < len(self.current_items):
             cur_item = self.current_items[self.current_index]
-            if cur_item.detection_box:
-                self.viewer.set_detection_box(cur_item.detection_box)
+            if cur_item.detection_box or cur_item.eye_box:
+                self.viewer.set_detection_box(cur_item.detection_box, cur_item.eye_box)
             else:
                 self.viewer.clear_detection_box()
 
@@ -1295,6 +1314,7 @@ class ImageCullerApp(ctk.CTk):
         init_flag = self.db.get_duplicate_flag_action()
         init_tag = self.db.get_duplicate_tag_action()
         init_star = self.db.get_duplicate_rating_action()
+        init_clear = self.db.get_clear_before_scan()
 
         DuplicateScanDialog(
             self,
@@ -1303,7 +1323,8 @@ class ImageCullerApp(ctk.CTk):
             initial_method=init_method,
             initial_flag_action=init_flag,
             initial_tag_action=init_tag,
-            initial_rating_action=init_star
+            initial_rating_action=init_star,
+            initial_clear_before_scan=init_clear
         )
 
     def _run_duplicate_scan(
@@ -1317,13 +1338,20 @@ class ImageCullerApp(ctk.CTk):
         keeper_tag: Optional[str] = None,
         keeper_rating: Optional[int] = None,
         keeper_method: str = "sharpest",
-        file_type_filter: str = "ARW"
+        file_type_filter: str = "ARW",
+        clear_before_scan: bool = True
     ):
         self.db.set_duplicate_method(method)
         self.db.set_duplicate_threshold(threshold)
         self.db.set_duplicate_flag_action(flag_action)
         self.db.set_duplicate_tag_action(tag_action or "")
         self.db.set_duplicate_rating_action(f"{rating_action} Star{'s' if rating_action and rating_action > 1 else ''}" if rating_action is not None else "None")
+        self.db.set_clear_before_scan(clear_before_scan)
+
+        if clear_before_scan:
+            session = self._get_active_session()
+            if session and session.items:
+                session.clear_all_metadata()
 
         self._update_status(f"Scanning directory for duplicates (Method: {method}, Threshold: {threshold})...")
 
@@ -1359,17 +1387,19 @@ class ImageCullerApp(ctk.CTk):
                 cancel_event=cancel_event
             )
             if not cancel_event.is_set():
-                self.after(0, lambda: self._on_scan_dups_complete(len(flagged), prog_dialog))
+                self.after(0, lambda: self._on_scan_dups_complete(len(flagged), prog_dialog, target_flag_filter=flag_action))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_scan_dups_complete(self, count: int, prog_dialog: Optional[ProgressDialog] = None):
+    def _on_scan_dups_complete(self, count: int, prog_dialog: Optional[ProgressDialog] = None, target_flag_filter: str = "Reject"):
         if prog_dialog and prog_dialog.winfo_exists():
             try:
                 prog_dialog.destroy()
             except Exception:
                 pass
         if count > 0:
+            if target_flag_filter in ["All", "Pick", "Reject", "Unflagged"]:
+                self.toolbar.seg_filter.set(target_flag_filter)
             self._on_filter_changed()
             mb.showinfo("Scan for Duplicates Complete", f"Identified {count} duplicate photos and applied configured actions.")
         else:
@@ -1383,6 +1413,7 @@ class ImageCullerApp(ctk.CTk):
         ans = mb.askyesno("Unflag All Images", "Are you sure you want to reset all flags to UNFLAGGED?")
         if ans:
             count = session.unflag_all_items()
+            self.toolbar.seg_filter.set("All")
             self._on_filter_changed()
             self._update_status(f"Unflagged {count} images across current directory.")
 
@@ -1416,6 +1447,7 @@ class ImageCullerApp(ctk.CTk):
         ans = mb.askyesno("Clear All Metadata", "Are you sure you want to reset Flags, Tags, Star Ratings, AND Subject Bounding Boxes for ALL photos?")
         if ans:
             count = session.clear_all_metadata()
+            self.toolbar.seg_filter.set("All")
             self.viewer.clear_detection_box()
             self._on_filter_changed()
             self._update_status(f"Cleared flags, tags, ratings, and subject bounding boxes across {count} photos.")
@@ -2054,14 +2086,14 @@ class DeleteStackedDialog(ctk.CTkToplevel):
 
         btn_sel_all = ctk.CTkButton(
             btn_bar, text="Select All", width=90, height=26,
-            fg_color="#333333", hover_color="#555555",
+            fg_color="#1f538d", hover_color="#14375e",
             font=ctk.CTkFont(size=11), command=lambda: self._set_all(True)
         )
         btn_sel_all.pack(side="left", padx=(0, 4))
 
         btn_desel = ctk.CTkButton(
             btn_bar, text="Deselect All", width=90, height=26,
-            fg_color="#333333", hover_color="#555555",
+            fg_color="#1f538d", hover_color="#14375e",
             font=ctk.CTkFont(size=11), command=lambda: self._set_all(False)
         )
         btn_desel.pack(side="left", padx=4)
@@ -2078,10 +2110,10 @@ class DeleteStackedDialog(ctk.CTkToplevel):
             ext = p.suffix.lower()
             if ext == ".arw":
                 badge = "RAW"
-                badge_color = "#3a86ff"
+                badge_color = "#1f538d"
             elif ext in (".jpg", ".jpeg"):
                 badge = "JPG"
-                badge_color = "#2b9348"
+                badge_color = "#1b4332"
             else:
                 badge = ext.upper().lstrip(".")
                 badge_color = "#888888"
@@ -2120,14 +2152,14 @@ class DeleteStackedDialog(ctk.CTkToplevel):
 
         btn_cancel = ctk.CTkButton(
             bottom_bar, text="Cancel", width=90, height=32,
-            fg_color="#4a4e69", hover_color="#22223b",
+            fg_color="#1f538d", hover_color="#14375e",
             command=self._on_cancel
         )
         btn_cancel.pack(side="right", padx=(4, 0))
 
         btn_delete = ctk.CTkButton(
             bottom_bar, text="🗑️ Delete Selected", width=140, height=32,
-            fg_color="#d90429", hover_color="#b00020",
+            fg_color="#5c0612", hover_color="#d90429",
             font=ctk.CTkFont(weight="bold", size=12),
             command=self._on_delete
         )

@@ -48,6 +48,7 @@ class ImageItem:
         self.dhash: Optional[int] = None
         self.metadata: Dict[str, Any] = {}
         self.detection_box: Optional[Tuple[float, float, float, float]] = None
+        self.eye_box: Optional[Tuple[float, float, float, float]] = None
 
     @property
     def tags_str(self) -> str:
@@ -254,6 +255,8 @@ class CullingSession:
                             item.add_tag(t.strip())
                 if rec.get("detection_box"):
                     item.detection_box = rec["detection_box"]
+                if rec.get("eye_box"):
+                    item.eye_box = rec["eye_box"]
 
             if progress_callback:
                 try:
@@ -276,7 +279,8 @@ class CullingSession:
                     rating=item.rating,
                     sharpness=item.sharpness_score,
                     tags=item.tags_str,
-                    detection_box=item.detection_box
+                    detection_box=item.detection_box,
+                    eye_box=item.eye_box
                 )
 
     def unflag_all_items(self) -> int:
@@ -332,6 +336,9 @@ class CullingSession:
                 changed = True
             if item.detection_box is not None:
                 item.detection_box = None
+                changed = True
+            if item.eye_box is not None:
+                item.eye_box = None
                 changed = True
             if changed:
                 self.save_item_record(item)
@@ -442,18 +449,80 @@ class CullingSession:
         method: Optional[str] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None,
         cancel_event: Optional[threading.Event] = None,
-        file_type_filter: Optional[str] = None
+        file_type_filter: Optional[str] = None,
+        subject_detect: bool = False
     ):
         """
         Calculate sharpness score for all loaded items using multi-threading.
-        Supports algorithms: 'laplacian', 'tenengrad', 'bird_subject'.
+        When subject_detect=True and method is AI-based, also extracts subject & eye
+        bounding boxes during the same pass (single-pass integration).
         """
+        from .detectors.blur_detector import calculate_sharpness as calc_blur
+
         blur_method = method or (self.db.get_blur_method() if self.db else "laplacian")
         items_to_process = self._filter_items_by_file_type(file_type_filter)
+        eye_det_method = self.db.get_eye_detection_method() if self.db else "yolo"
+
+        is_ai_method = blur_method.lower() in (
+            "ai_subject", "yolo_subject", "yolo", "yolo_bird_eye",
+            "bird_eye_yolo", "yolo_eye", "bird_subject", "local_var"
+        )
+        extract_boxes = subject_detect or is_ai_method
+        yolo_model = self.image_loader.get_yolo_model() if extract_boxes else None
+        yolo_pose_model = self.image_loader.get_yolo_pose_model() if (extract_boxes and eye_det_method == "yolo") else None
+
+        yolo_lock = threading.Lock()
 
         def calc_item(index_and_item):
             idx, item = index_and_item
-            item.sharpness_score = self.image_loader.calculate_sharpness(item.path, method=blur_method)
+            try:
+                img = self.image_loader.get_thumbnail(str(item.path), max_size=(640, 640))
+                if img is None:
+                    item.sharpness_score = 0.0
+                    return item
+
+                if extract_boxes:
+                    with yolo_lock:
+                        result = calc_blur(
+                            img,
+                            method=blur_method,
+                            yolo_model=yolo_model,
+                            return_box=True,
+                            eye_detection_method=eye_det_method,
+                            yolo_pose_model=yolo_pose_model
+                        )
+                    score, dual_box = result
+                    item.sharpness_score = score
+                    subject_box, eye_box_raw = dual_box
+                    if subject_box:
+                        try:
+                            thumb_w, thumb_h = img.size
+                            sx1, sy1, sx2, sy2 = subject_box
+                            item.detection_box = (
+                                sx1 / thumb_w, sy1 / thumb_h,
+                                sx2 / thumb_w, sy2 / thumb_h
+                            )
+                        except Exception:
+                            item.detection_box = None
+                    else:
+                        item.detection_box = None
+                    if eye_box_raw:
+                        try:
+                            thumb_w, thumb_h = img.size
+                            ex1, ey1, ex2, ey2 = eye_box_raw
+                            item.eye_box = (
+                                ex1 / thumb_w, ey1 / thumb_h,
+                                ex2 / thumb_w, ey2 / thumb_h
+                            )
+                        except Exception:
+                            item.eye_box = None
+                    else:
+                        item.eye_box = None
+                else:
+                    with yolo_lock:
+                        item.sharpness_score = calc_blur(img, method=blur_method, yolo_model=yolo_model, eye_detection_method=eye_det_method)
+            except Exception:
+                item.sharpness_score = 0.0
             self.save_item_record(item)
             return item
 
@@ -489,15 +558,11 @@ class CullingSession:
         if cancel_event and cancel_event.is_set():
             return []
 
-        try:
-            from ultralytics import YOLO
-            from pathlib import Path
-            models_dir = Path(__file__).resolve().parent.parent.parent.parent / "lib" / "models"
-            models_dir.mkdir(parents=True, exist_ok=True)
-            model_path = models_dir / "yolov8n.pt"
-            yolo_model = YOLO(str(model_path))
-        except Exception:
+        eye_det_method = self.db.get_eye_detection_method() if self.db else "yolo"
+        yolo_model = self.image_loader.get_yolo_model()
+        if yolo_model is None:
             return []
+        yolo_pose_model = self.image_loader.get_yolo_pose_model() if eye_det_method == "yolo" else None
 
         from .detectors.blur.yolo_subject import compute_ai_subject_sharpness
 
@@ -508,27 +573,43 @@ class CullingSession:
                 img = self.image_loader.get_thumbnail(str(item.path), max_size=(400, 400))
                 if img is None:
                     item.detection_box = None
+                    item.eye_box = None
                     return item
 
                 with yolo_lock:
-                    _, box = compute_ai_subject_sharpness(None, img, yolo_model=yolo_model, return_box=True)
+                    _, dual_box = compute_ai_subject_sharpness(
+                        None, img, yolo_model=yolo_model, return_box=True,
+                        eye_detection_method=eye_det_method, yolo_pose_model=yolo_pose_model
+                    )
 
-                if box:
+                subject_box, eye_box_raw = dual_box
+                if subject_box:
                     try:
                         thumb_w, thumb_h = img.size
-                        x1, y1, x2, y2 = box
+                        sx1, sy1, sx2, sy2 = subject_box
                         item.detection_box = (
-                            x1 / thumb_w,
-                            y1 / thumb_h,
-                            x2 / thumb_w,
-                            y2 / thumb_h
+                            sx1 / thumb_w, sy1 / thumb_h,
+                            sx2 / thumb_w, sy2 / thumb_h
                         )
                     except Exception:
                         item.detection_box = None
                 else:
                     item.detection_box = None
+                if eye_box_raw:
+                    try:
+                        thumb_w, thumb_h = img.size
+                        ex1, ey1, ex2, ey2 = eye_box_raw
+                        item.eye_box = (
+                            ex1 / thumb_w, ey1 / thumb_h,
+                            ex2 / thumb_w, ey2 / thumb_h
+                        )
+                    except Exception:
+                        item.eye_box = None
+                else:
+                    item.eye_box = None
             except Exception:
                 item.detection_box = None
+                item.eye_box = None
             return item
 
         with ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 2)) as executor:
@@ -555,11 +636,15 @@ class CullingSession:
         rating_action: Optional[int] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None,
         cancel_event: Optional[threading.Event] = None,
-        file_type_filter: Optional[str] = None
+        file_type_filter: Optional[str] = None,
+        subject_detect: bool = False,
+        safe_mode: bool = False
     ) -> List[ImageItem]:
         """
         Scan for Blur: Analyzes sharpness scores across all photos using selected method.
         Applies configurable flag, tag, and rating actions to detected blurry photos.
+        When subject_detect=True with AI method, extracts bounding boxes in the same pass.
+        When safe_mode=True, checks for loose duplicates and only rejects photos if a sharper non-blurry version exists.
         """
         if not self.items:
             return []
@@ -568,7 +653,13 @@ class CullingSession:
             return []
 
         blur_method = method or (self.db.get_blur_method() if self.db else "laplacian")
-        self.compute_sharpness_scores(method=blur_method, progress_callback=progress_callback, cancel_event=cancel_event, file_type_filter=file_type_filter)
+        self.compute_sharpness_scores(
+            method=blur_method,
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+            file_type_filter=file_type_filter,
+            subject_detect=subject_detect
+        )
 
         if cancel_event and cancel_event.is_set():
             return []
@@ -584,27 +675,59 @@ class CullingSession:
             "Unflagged": FlagState.UNFLAGGED,
         }
 
+        blur_candidate_set = set(sorted_items[:cutoff_index])
+        item_hashes = {}
+
+        if safe_mode and blur_candidate_set:
+            for it in filtered_items:
+                if it.dhash is not None:
+                    item_hashes[it] = it.dhash
+                else:
+                    try:
+                        thumb = self.image_loader.get_thumbnail(it.path, max_size=(160, 160))
+                        if thumb:
+                            h_val = self._compute_dhash(thumb)
+                            it.dhash = h_val
+                            item_hashes[it] = h_val
+                    except Exception:
+                        pass
+
         flagged_blurry = []
         for i in range(cutoff_index):
             if cancel_event and cancel_event.is_set():
                 break
             item = sorted_items[i]
-            
+
             if cancel_event and cancel_event.is_set():
                 break
-            
+
+            is_rejected = True
+            if safe_mode:
+                item_h = item_hashes.get(item)
+                if item_h is not None:
+                    has_sharper_duplicate = False
+                    for other, other_h in item_hashes.items():
+                        if other is not item and other not in blur_candidate_set:
+                            dist = bin(item_h ^ other_h).count('1')
+                            if dist <= 8 and other.sharpness_score > item.sharpness_score:
+                                has_sharper_duplicate = True
+                                break
+                    if not has_sharper_duplicate:
+                        is_rejected = False
+
             tag_val = tag_action or ""
             if tag_val:
                 item.add_tag(tag_val)
-            
-            if flag_action in flag_map:
-                item.flag = flag_map[flag_action]
-            
+
+            if is_rejected:
+                if flag_action in flag_map:
+                    item.flag = flag_map[flag_action]
+                flagged_blurry.append(item)
+
             if rating_action is not None:
                 item.rating = max(0, min(5, rating_action))
 
             self.save_item_record(item)
-            flagged_blurry.append(item)
 
         return flagged_blurry
 
@@ -702,14 +825,14 @@ class CullingSession:
         import datetime
 
         if keeper_method == "ai_eye_focus":
-            # Compute AI subject sharpness for each item in the group
+            eye_det_method = self.db.get_eye_detection_method() if self.db else "auto"
             from .detectors.blur import calculate_sharpness
             ai_scores = {}
             for item in group:
                 try:
                     img = self.image_loader.load_full_image(item.path, raw_scale=0.25)
                     if img:
-                        ai_scores[item] = calculate_sharpness(img, method="ai_subject")
+                        ai_scores[item] = calculate_sharpness(img, method="ai_subject", eye_detection_method=eye_det_method)
                     else:
                         ai_scores[item] = item.sharpness_score
                 except Exception:

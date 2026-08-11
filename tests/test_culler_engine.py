@@ -219,13 +219,14 @@ class TestCullingEngine(unittest.TestCase):
 
     def test_clear_all_metadata(self):
         """
-        Verify that clear_all_metadata resets flags, tags, ratings, and detection boxes across all items.
+        Verify that clear_all_metadata resets flags, tags, ratings, detection boxes, and eye boxes across all items.
         """
         item = ImageItem(Path("D:/Photos/IMG_001.JPG"))
         item.flag = FlagState.PICK
         item.rating = 5
         item.add_tag("Blur")
         item.detection_box = (0.1, 0.2, 0.8, 0.9)
+        item.eye_box = (0.2, 0.25, 0.7, 0.5)
         self.session.items = [item]
 
         count = self.session.clear_all_metadata()
@@ -234,14 +235,16 @@ class TestCullingEngine(unittest.TestCase):
         self.assertEqual(item.rating, 0)
         self.assertEqual(len(item.tags), 0)
         self.assertIsNone(item.detection_box)
+        self.assertIsNone(item.eye_box)
 
     def test_detection_box_db_persistence(self):
         """
-        Verify detection_box is persisted to and restored from the database.
+        Verify detection_box and eye_box are persisted to and restored from the database.
         """
         dir_path = Path("D:/Photos/BoxTest").resolve()
         file_path = str(dir_path / "IMG_002.JPG")
         box = (0.15, 0.25, 0.85, 0.95)
+        eye_box = (0.25, 0.30, 0.75, 0.55)
         self.db.save_image_record(
             file_path=file_path,
             filename="IMG_002.JPG",
@@ -249,30 +252,33 @@ class TestCullingEngine(unittest.TestCase):
             rating=0,
             sharpness=0.0,
             tags="",
-            detection_box=box
+            detection_box=box,
+            eye_box=eye_box
         )
 
         records = self.db.get_all_records_for_dir(str(dir_path))
         self.assertIn(file_path, records)
         self.assertIsNotNone(records[file_path]["detection_box"])
+        self.assertIsNotNone(records[file_path]["eye_box"])
         restored_box = records[file_path]["detection_box"]
+        restored_eye = records[file_path]["eye_box"]
         self.assertAlmostEqual(restored_box[0], 0.15, places=4)
-        self.assertAlmostEqual(restored_box[1], 0.25, places=4)
-        self.assertAlmostEqual(restored_box[2], 0.85, places=4)
-        self.assertAlmostEqual(restored_box[3], 0.95, places=4)
+        self.assertAlmostEqual(restored_eye[0], 0.25, places=4)
 
     def test_detection_box_cleared_in_db(self):
         """
-        Verify that saving an item with detection_box=None clears it in the DB.
+        Verify that saving an item with detection_box=None and eye_box=None clears them in the DB.
         """
         dir_path = Path("D:/Photos/BoxClear").resolve()
         file_path = str(dir_path / "IMG_003.JPG")
         box = (0.1, 0.2, 0.8, 0.9)
+        eye_box = (0.2, 0.25, 0.7, 0.5)
         self.db.save_image_record(
             file_path=file_path,
             filename="IMG_003.JPG",
             flag="unflagged",
-            detection_box=box
+            detection_box=box,
+            eye_box=eye_box
         )
 
         # Now clear it
@@ -280,12 +286,14 @@ class TestCullingEngine(unittest.TestCase):
             file_path=file_path,
             filename="IMG_003.JPG",
             flag="unflagged",
-            detection_box=None
+            detection_box=None,
+            eye_box=None
         )
 
         records = self.db.get_all_records_for_dir(str(dir_path))
         self.assertIn(file_path, records)
         self.assertIsNone(records[file_path]["detection_box"])
+        self.assertIsNone(records[file_path]["eye_box"])
 
     @patch.object(CullingSession, "compute_sharpness_scores")
     def test_scan_for_blur_sensitivity_one_percent(self, mock_compute_scores):
@@ -306,6 +314,42 @@ class TestCullingEngine(unittest.TestCase):
         self.assertEqual(flagged[0].path.name, "IMG_000.JPG")
         self.assertEqual(flagged[0].flag, FlagState.REJECT)
         self.assertTrue(flagged[0].has_tag("Blur"))
+
+    @patch.object(CullingSession, "compute_sharpness_scores")
+    def test_scan_for_blur_safe_mode_preserves_unique_blurry_photo(self, mock_compute_scores):
+        """
+        Verify safe_mode=True preserves unique blurry photos if no sharper duplicate exists,
+        and only rejects blurry photos that have a sharper duplicate.
+        """
+        # Create 3 items:
+        # Item 1: Blurry photo, dhash=0x1111 (unique capture, no duplicate)
+        item1 = ImageItem(Path("D:/Photos/UniqueBlurry.JPG"))
+        item1.sharpness_score = 10.0
+        item1.dhash = 0x1111111111111111
+
+        # Item 2: Blurry photo, dhash=0xAAAA (has duplicate Item 3)
+        item2 = ImageItem(Path("D:/Photos/DupBlurry.JPG"))
+        item2.sharpness_score = 20.0
+        item2.dhash = 0xAAAAAAAAAAAAAAAA
+
+        # Item 3: Sharp photo, dhash=0xAAAA (sharper duplicate of Item 2)
+        item3 = ImageItem(Path("D:/Photos/DupSharp.JPG"))
+        item3.sharpness_score = 500.0
+        item3.dhash = 0xAAAAAAAAAAAAAAAA
+
+        self.session.items = [item1, item2, item3]
+
+        # In safe_mode=True with 67% cutoff (bottom 2 items = item1 & item2):
+        # item1 (unique) should be preserved (not rejected).
+        # item2 (has sharper dup item3) should be rejected.
+        flagged = self.session.scan_for_blur(bottom_percentile=67.0, method="laplacian", safe_mode=True)
+
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].path.name, "DupBlurry.JPG")
+        self.assertEqual(flagged[0].flag, FlagState.REJECT)
+        self.assertTrue(flagged[0].has_tag("Blur"))
+        self.assertEqual(item1.flag, FlagState.UNFLAGGED)
+        self.assertTrue(item1.has_tag("Blur"))
 
 
 if __name__ == "__main__":

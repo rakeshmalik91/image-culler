@@ -67,8 +67,8 @@ class MetadataPanel(ctk.CTkFrame):
         self.btn_pick = ctk.CTkButton(
             self.action_box,
             text="[P] PICK",
-            fg_color="#2b9348",
-            hover_color="#1b4332",
+            fg_color="#1b4332",
+            hover_color="#2b9348",
             font=ctk.CTkFont(weight="bold", size=14),
             command=lambda: self.on_set_flag(FlagState.PICK)
         )
@@ -78,8 +78,8 @@ class MetadataPanel(ctk.CTkFrame):
         self.btn_reject = ctk.CTkButton(
             self.action_box,
             text="[X] REJECT",
-            fg_color="#d90429",
-            hover_color="#8d99ae",
+            fg_color="#5c0612",
+            hover_color="#d90429",
             font=ctk.CTkFont(weight="bold", size=14),
             command=lambda: self.on_set_flag(FlagState.REJECT)
         )
@@ -89,8 +89,8 @@ class MetadataPanel(ctk.CTkFrame):
         self.btn_unflag = ctk.CTkButton(
             self.action_box,
             text="[U] UNFLAG",
-            fg_color="#4a4e69",
-            hover_color="#22223b",
+            fg_color="#1f538d",
+            hover_color="#14375e",
             command=lambda: self.on_set_flag(FlagState.UNFLAGGED)
         )
         self.btn_unflag.pack(fill="x", pady=2)
@@ -114,8 +114,8 @@ class MetadataPanel(ctk.CTkFrame):
                 text="🚩 Flags",
                 width=62,
                 height=26,
-                fg_color="#333333",
-                hover_color="#555555",
+                fg_color="#1f538d",
+                hover_color="#14375e",
                 font=ctk.CTkFont(size=10, weight="bold"),
                 command=self.on_unflag_all
             )
@@ -128,8 +128,8 @@ class MetadataPanel(ctk.CTkFrame):
                 text="🏷️ Tags",
                 width=62,
                 height=26,
-                fg_color="#333333",
-                hover_color="#555555",
+                fg_color="#1f538d",
+                hover_color="#14375e",
                 font=ctk.CTkFont(size=10, weight="bold"),
                 command=self.on_untag_all
             )
@@ -142,8 +142,8 @@ class MetadataPanel(ctk.CTkFrame):
                 text="⭐ Stars",
                 width=62,
                 height=26,
-                fg_color="#333333",
-                hover_color="#555555",
+                fg_color="#1f538d",
+                hover_color="#14375e",
                 font=ctk.CTkFont(size=10, weight="bold"),
                 command=self.on_unrate_all
             )
@@ -156,8 +156,8 @@ class MetadataPanel(ctk.CTkFrame):
                 text="💥 All",
                 width=62,
                 height=26,
-                fg_color="#5c0612",
-                hover_color="#d90429",
+                fg_color="#1f538d",
+                hover_color="#14375e",
                 font=ctk.CTkFont(size=10, weight="bold"),
                 command=self.on_clear_all
             )
@@ -176,33 +176,63 @@ class MetadataPanel(ctk.CTkFrame):
         p_name = Path(self.picked_folder).name or self.picked_folder
         r_name = Path(self.rejected_folder).name or self.rejected_folder
 
+        f_pick_row = ctk.CTkFrame(self.move_box, fg_color="transparent")
+        f_pick_row.pack(fill="x", pady=2)
+
         self.btn_move_picked = ctk.CTkButton(
-            self.move_box,
+            f_pick_row,
             text=f"📁 Move Picked -> [{p_name}]",
             fg_color="#1b4332",
             hover_color="#2b9348",
             font=ctk.CTkFont(size=11, weight="bold"),
             command=self._handle_move_picked
         )
-        self.btn_move_picked.pack(fill="x", pady=2)
+        self.btn_move_picked.pack(side="left", fill="x", expand=True)
+
+        self.btn_open_picked = ctk.CTkButton(
+            f_pick_row,
+            text="📂",
+            width=32,
+            fg_color="#1b4332",
+            hover_color="#2b9348",
+            font=ctk.CTkFont(size=13),
+            command=lambda: self._open_folder(self.picked_folder)
+        )
+        self.btn_open_picked.pack(side="left", padx=(2, 0))
+        ToolTip(self.btn_open_picked, "Open picked folder in file explorer")
+
+        f_reject_row = ctk.CTkFrame(self.move_box, fg_color="transparent")
+        f_reject_row.pack(fill="x", pady=2)
 
         self.btn_move_rejected = ctk.CTkButton(
-            self.move_box,
+            f_reject_row,
             text=f"📁 Move Rejected -> [{r_name}]",
             fg_color="#5c0612",
             hover_color="#d90429",
             font=ctk.CTkFont(size=11, weight="bold"),
             command=self._handle_move_rejected
         )
-        self.btn_move_rejected.pack(fill="x", pady=2)
+        self.btn_move_rejected.pack(side="left", fill="x", expand=True)
+
+        self.btn_open_rejected = ctk.CTkButton(
+            f_reject_row,
+            text="📂",
+            width=32,
+            fg_color="#5c0612",
+            hover_color="#d90429",
+            font=ctk.CTkFont(size=13),
+            command=lambda: self._open_folder(self.rejected_folder)
+        )
+        self.btn_open_rejected.pack(side="left", padx=(2, 0))
+        ToolTip(self.btn_open_rejected, "Open rejected folder in file explorer")
 
         if self.on_crop:
             self.btn_crop = ctk.CTkButton(
                 self.move_box,
                 text="✂️ Crop This Image",
-                fg_color="#ffb703",
-                hover_color="#fb8500",
-                text_color="#000000",
+                fg_color="#1f538d",
+                hover_color="#14375e",
+                text_color="#ffffff",
                 font=ctk.CTkFont(size=11, weight="bold"),
                 command=self.on_crop
             )
@@ -213,8 +243,8 @@ class MetadataPanel(ctk.CTkFrame):
             self.btn_convert_jpg = ctk.CTkButton(
                 self.move_box,
                 text="🖼️ Convert Selected to JPG",
-                fg_color="#fb5607",
-                hover_color="#ff006e",
+                fg_color="#1f538d",
+                hover_color="#14375e",
                 font=ctk.CTkFont(size=11, weight="bold"),
                 command=self.on_convert_jpg
             )
@@ -305,6 +335,38 @@ class MetadataPanel(ctk.CTkFrame):
     def _handle_config_folders(self):
         if self.on_config_output_folders:
             self.on_config_output_folders()
+
+    def _open_folder(self, folder_name: str):
+        """Open the target output folder in the OS file explorer."""
+        import os
+        import subprocess
+        try:
+            # Resolve relative folder against the active session directory
+            if os.path.isabs(folder_name):
+                target = Path(folder_name)
+            else:
+                # Walk up to find the session directory from gui.py
+                app = self.winfo_toplevel()
+                session_dir = None
+                if hasattr(app, "_get_active_tab"):
+                    tab = app._get_active_tab()
+                    if tab and tab.get("session") and tab["session"].directory:
+                        session_dir = Path(tab["session"].directory)
+                if session_dir:
+                    target = session_dir / folder_name
+                else:
+                    target = Path(folder_name)
+
+            if target.exists() and target.is_dir():
+                if os.name == "nt":
+                    os.startfile(str(target))
+                else:
+                    subprocess.Popen(["xdg-open", str(target)])
+            else:
+                from tkinter import messagebox as mb
+                mb.showinfo("Open Folder", f"Folder does not exist yet:\n{target}")
+        except Exception:
+            pass
 
     def _toggle_tag(self, tag_name: str):
         if self.on_toggle_tag:

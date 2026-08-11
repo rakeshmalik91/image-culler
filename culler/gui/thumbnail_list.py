@@ -314,6 +314,7 @@ class ThumbnailList(ctk.CTkFrame):
             self._prev_active_idx = selected_idx
 
             for idx, item in enumerate(items):
+                self.update_single_item_status(idx, item)
                 if item.is_stacked and len(item.stacked_paths) >= 2:
                     for sub_p in item.stacked_paths:
                         ext = sub_p.suffix.lower()

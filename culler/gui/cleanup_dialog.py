@@ -109,8 +109,8 @@ class MetadataCleanupDialog(ctk.CTkToplevel):
         btn_clean_sel = ctk.CTkButton(
             action_bar,
             text="🧹 Clean Selected Folders",
-            fg_color="#d90429",
-            hover_color="#8d99ae",
+            fg_color="#5c0612",
+            hover_color="#d90429",
             font=ctk.CTkFont(weight="bold"),
             command=self._clean_selected
         )
@@ -119,7 +119,7 @@ class MetadataCleanupDialog(ctk.CTkToplevel):
         btn_clean_all = ctk.CTkButton(
             action_bar,
             text="🗑️ Purge Entire Database",
-            fg_color="#333333",
+            fg_color="#5c0612",
             hover_color="#d90429",
             font=ctk.CTkFont(weight="bold"),
             command=self._clean_entire_db
@@ -130,8 +130,8 @@ class MetadataCleanupDialog(ctk.CTkToplevel):
             action_bar,
             text="Close",
             width=80,
-            fg_color="#4a4e69",
-            hover_color="#22223b",
+            fg_color="#1f538d",
+            hover_color="#14375e",
             command=self.destroy
         )
         btn_close.pack(side="right", padx=15, pady=10)

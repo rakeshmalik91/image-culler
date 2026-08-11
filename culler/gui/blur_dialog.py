@@ -2,6 +2,7 @@ from typing import Callable, Optional, Dict, Any
 import customtkinter as ctk
 
 from ..detectors.config_loader import get_blur_methods_config
+from .tooltip import ToolTip
 
 METHODS_DATA: Dict[str, Dict[str, Any]] = get_blur_methods_config()
 
@@ -15,26 +16,32 @@ class BlurScanDialog(ctk.CTkToplevel):
     def __init__(
         self,
         master,
-        on_run: Callable[[float, str, str, Optional[str], Optional[int], str, bool], None],
+        on_run: Callable[[float, str, str, Optional[str], Optional[int], str, bool, bool, bool, str], None],
         initial_percentile: float = 15.0,
         initial_method: str = "laplacian",
         initial_flag_action: str = "Reject",
         initial_tag_action: str = "Blur",
         initial_rating_action: str = "None",
         initial_file_type: str = "ARW",
-        initial_subject_detect: bool = False
+        initial_subject_detect: bool = False,
+        initial_safe_blur: bool = True,
+        initial_clear_before_scan: bool = True,
+        initial_eye_detection_method: str = "auto"
     ):
         super().__init__(master)
         self.on_run = on_run
         self.selected_method = initial_method if initial_method in METHODS_DATA else "laplacian"
         self.selected_file_type = initial_file_type
         self.selected_subject_detect = initial_subject_detect
+        self.selected_safe_blur = initial_safe_blur
+        self.selected_clear_before_scan = initial_clear_before_scan
+        self.selected_eye_detection_method = initial_eye_detection_method
         self.initial_flag_action = initial_flag_action
         self.initial_tag_action = initial_tag_action
         self.initial_rating_action = initial_rating_action
 
         self.title("🔍 Scan for Blur Options")
-        self.geometry("880x620")
+        self.geometry("960x680")
         self.resizable(False, False)
 
         # Make modal dialog window
@@ -117,30 +124,30 @@ class BlurScanDialog(ctk.CTkToplevel):
         right_panel = ctk.CTkFrame(main_box, fg_color="transparent")
         right_panel.pack(side="right", fill="both", expand=True)
 
-        # Scrollable Method Details Card Box
-        self.card_info = ctk.CTkScrollableFrame(right_panel, corner_radius=6, fg_color="#222222", border_width=1, border_color="#383838", height=220)
-        self.card_info.pack(fill="both", expand=True, pady=(0, 6))
+        # Scrollable Method Details Card Box (Height: 215)
+        self.card_info = ctk.CTkScrollableFrame(right_panel, corner_radius=6, fg_color="#222222", border_width=1, border_color="#383838", height=215)
+        self.card_info.pack(fill="x", pady=(0, 2))
 
-        self.lbl_card_title = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=13, weight="bold"), text_color="#ffffff", anchor="w")
-        self.lbl_card_title.pack(anchor="w", padx=12, pady=(10, 2))
+        self.lbl_card_title = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=12, weight="bold"), text_color="#ffffff", anchor="w")
+        self.lbl_card_title.pack(anchor="w", padx=10, pady=(6, 1))
 
         self.lbl_card_speed = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=11, weight="bold"), text_color="#3a86ff", anchor="w")
-        self.lbl_card_speed.pack(anchor="w", padx=12, pady=2)
+        self.lbl_card_speed.pack(anchor="w", padx=10, pady=1)
 
-        self.lbl_card_how = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=11), text_color="#48cae4", justify="left", anchor="w", wraplength=510)
-        self.lbl_card_how.pack(anchor="w", padx=12, pady=2)
+        self.lbl_card_how = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=11), text_color="#48cae4", justify="left", anchor="w", wraplength=600)
+        self.lbl_card_how.pack(anchor="w", padx=10, pady=1)
 
-        self.lbl_card_detects = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=11), text_color="#dddddd", justify="left", anchor="w", wraplength=510)
-        self.lbl_card_detects.pack(anchor="w", padx=12, pady=2)
+        self.lbl_card_detects = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=11), text_color="#dddddd", justify="left", anchor="w", wraplength=600)
+        self.lbl_card_detects.pack(anchor="w", padx=10, pady=1)
 
-        self.lbl_card_pros = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=11), text_color="#2b9348", justify="left", anchor="w", wraplength=510)
-        self.lbl_card_pros.pack(anchor="w", padx=12, pady=2)
+        self.lbl_card_pros = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=11), text_color="#2b9348", justify="left", anchor="w", wraplength=600)
+        self.lbl_card_pros.pack(anchor="w", padx=10, pady=1)
 
-        self.lbl_card_cons = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=11), text_color="#d90429", justify="left", anchor="w", wraplength=510)
-        self.lbl_card_cons.pack(anchor="w", padx=12, pady=2)
+        self.lbl_card_cons = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=11), text_color="#d90429", justify="left", anchor="w", wraplength=600)
+        self.lbl_card_cons.pack(anchor="w", padx=10, pady=1)
 
-        self.lbl_card_best = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=11), text_color="#ffb703", justify="left", anchor="w", wraplength=510)
-        self.lbl_card_best.pack(anchor="w", padx=12, pady=(2, 10))
+        self.lbl_card_best = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=11), text_color="#ffb703", justify="left", anchor="w", wraplength=600)
+        self.lbl_card_best.pack(anchor="w", padx=10, pady=(1, 6))
 
         # Initial details card populate
         self._update_card_info(self.selected_method)
@@ -151,7 +158,7 @@ class BlurScanDialog(ctk.CTkToplevel):
             text="Reject Sensitivity Cutoff (% bottom blurry photos):",
             font=ctk.CTkFont(size=12, weight="bold")
         )
-        lbl_p.pack(anchor="w", pady=(3, 2))
+        lbl_p.pack(anchor="w", pady=(2, 2))
 
         f_perc = ctk.CTkFrame(right_panel, fg_color="transparent")
         f_perc.pack(fill="x", pady=1)
@@ -171,7 +178,7 @@ class BlurScanDialog(ctk.CTkToplevel):
 
         # Configurable Actions for Detected Blurry Items
         f_actions = ctk.CTkFrame(right_panel, corner_radius=6, fg_color="#1a1a1a", border_width=1, border_color="#333333")
-        f_actions.pack(fill="x", pady=(6, 2))
+        f_actions.pack(fill="x", pady=(2, 2))
 
         lbl_act_head = ctk.CTkLabel(
             f_actions,
@@ -179,10 +186,10 @@ class BlurScanDialog(ctk.CTkToplevel):
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="#ffb703"
         )
-        lbl_act_head.pack(anchor="w", padx=10, pady=(6, 4))
+        lbl_act_head.pack(anchor="w", padx=10, pady=(4, 2))
 
         f_act_row = ctk.CTkFrame(f_actions, fg_color="transparent")
-        f_act_row.pack(fill="x", padx=10, pady=(0, 6))
+        f_act_row.pack(fill="x", padx=10, pady=(0, 4))
 
         # Flag Dropdown
         lbl_flag = ctk.CTkLabel(f_act_row, text="Flag:", font=ctk.CTkFont(size=11, weight="bold"))
@@ -226,40 +233,75 @@ class BlurScanDialog(ctk.CTkToplevel):
         self.combo_star.set(self.initial_rating_action)
         self.combo_star.pack(side="left")
 
-        # File Type Filter
-        f_filetype = ctk.CTkFrame(right_panel, corner_radius=6, fg_color="#1a1a1a", border_width=1, border_color="#333333")
-        f_filetype.pack(fill="x", pady=(6, 2))
+        # File Type & Options Box
+        f_options = ctk.CTkFrame(right_panel, corner_radius=6, fg_color="#1a1a1a", border_width=1, border_color="#333333")
+        f_options.pack(fill="x", pady=(2, 2))
 
-        lbl_filetype = ctk.CTkLabel(f_filetype, text="Scan File Type:", font=ctk.CTkFont(size=11, weight="bold"), text_color="#ffb703")
-        lbl_filetype.pack(anchor="w", padx=10, pady=(6, 4))
+        f_filetype_row = ctk.CTkFrame(f_options, fg_color="transparent")
+        f_filetype_row.pack(fill="x", padx=10, pady=(6, 2))
 
-        f_filetype_row = ctk.CTkFrame(f_filetype, fg_color="transparent")
-        f_filetype_row.pack(fill="x", padx=10, pady=(0, 6))
+        lbl_filetype = ctk.CTkLabel(f_filetype_row, text="Scan File Type:", font=ctk.CTkFont(size=11, weight="bold"), text_color="#ffb703")
+        lbl_filetype.pack(side="left")
 
         self.combo_filetype = ctk.CTkOptionMenu(
             f_filetype_row,
             values=["All", "ARW", "JPG"],
-            width=120,
+            width=100,
             height=26,
             dynamic_resizing=False
         )
         self.combo_filetype.set(self.selected_file_type)
-        self.combo_filetype.pack(side="left")
-
-        # Subject Detection Checkbox
-        self.f_subject = ctk.CTkFrame(right_panel, corner_radius=6, fg_color="#1a1a1a", border_width=1, border_color="#333333")
-        self.f_subject.pack(fill="x", pady=(6, 2))
+        self.combo_filetype.pack(side="left", padx=(8, 0))
 
         self.chk_subject_var = ctk.BooleanVar(value=self.selected_subject_detect)
         self.chk_subject = ctk.CTkCheckBox(
-            self.f_subject,
+            f_options,
             text="Highlight Subject Detection (YOLO)",
             variable=self.chk_subject_var,
             font=ctk.CTkFont(size=11, weight="bold"),
             checkbox_width=18,
             checkbox_height=18
         )
-        self.chk_subject.pack(anchor="w", padx=10, pady=(8, 8))
+        self.chk_subject.pack(anchor="w", padx=10, pady=(4, 2))
+
+        self.f_eye = ctk.CTkFrame(f_options, fg_color="transparent")
+        self.f_eye.pack(fill="x", padx=10, pady=(0, 4))
+
+        lbl_eye = ctk.CTkLabel(self.f_eye, text="Eye Detection Method:", font=ctk.CTkFont(size=11, weight="bold"))
+        lbl_eye.pack(side="left", padx=(0, 4))
+
+        self.combo_eye = ctk.CTkOptionMenu(
+            self.f_eye,
+            values=["YOLO AI (Pose + BBox + Eye ROI)"],
+            width=245,
+            height=26,
+            dynamic_resizing=False
+        )
+        self.combo_eye.set("YOLO AI (Pose + BBox + Eye ROI)")
+        self.combo_eye.pack(side="left")
+
+        self.chk_safe_blur_var = ctk.BooleanVar(value=self.selected_safe_blur)
+        self.chk_safe_blur = ctk.CTkCheckBox(
+            f_options,
+            text="🛡️ Safe Blur Scan (Only reject if a sharper duplicate exists)",
+            variable=self.chk_safe_blur_var,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            checkbox_width=18,
+            checkbox_height=18
+        )
+        self.chk_safe_blur.pack(anchor="w", padx=10, pady=(0, 2))
+        ToolTip(self.chk_safe_blur, "Prevents rejecting unique photos. A blurry photo is only marked for reject if a sharper or non-blurry duplicate exists.")
+
+        self.chk_clear_var = ctk.BooleanVar(value=self.selected_clear_before_scan)
+        self.chk_clear = ctk.CTkCheckBox(
+            f_options,
+            text="Clear flags, tags & bounding boxes before scan",
+            variable=self.chk_clear_var,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            checkbox_width=18,
+            checkbox_height=18
+        )
+        self.chk_clear.pack(anchor="w", padx=10, pady=(0, 6))
 
         self._update_subject_visibility(self.selected_method)
 
@@ -271,8 +313,8 @@ class BlurScanDialog(ctk.CTkToplevel):
             btn_bar,
             text="Cancel",
             width=90,
-            fg_color="#4a4e69",
-            hover_color="#22223b",
+            fg_color="#1f538d",
+            hover_color="#14375e",
             command=self.destroy
         )
         btn_cancel.pack(side="right", padx=4)
@@ -281,8 +323,8 @@ class BlurScanDialog(ctk.CTkToplevel):
             btn_bar,
             text="🔍 Run Blur Scan",
             width=140,
-            fg_color="#7b2cbf",
-            hover_color="#5a189a",
+            fg_color="#1f538d",
+            hover_color="#14375e",
             font=ctk.CTkFont(weight="bold"),
             command=self._handle_run
         )
@@ -320,13 +362,18 @@ class BlurScanDialog(ctk.CTkToplevel):
         )
 
     def _update_subject_visibility(self, method_key: str):
-        if self._is_yolo_method(method_key):
-            if not self.f_subject.winfo_ismapped():
-                self.f_subject.pack(fill="x", pady=(6, 2))
+        show = self._is_yolo_method(method_key)
+        if show:
+            if not self.chk_subject.winfo_ismapped():
+                self.chk_subject.pack(anchor="w", padx=10, pady=(4, 2))
+            if not self.f_eye.winfo_ismapped():
+                self.f_eye.pack(fill="x", padx=10, pady=(0, 4))
         else:
-            if self.f_subject.winfo_ismapped():
-                self.f_subject.pack_forget()
+            if self.chk_subject.winfo_ismapped():
+                self.chk_subject.pack_forget()
                 self.chk_subject_var.set(False)
+            if self.f_eye.winfo_ismapped():
+                self.f_eye.pack_forget()
 
     def _on_slider_change(self, val: float):
         self.lbl_perc_val.configure(text=f"{int(val)}%")
@@ -337,6 +384,7 @@ class BlurScanDialog(ctk.CTkToplevel):
         tag_act = self.chk_tag_var.get() if self.chk_tag_var.get() else None
         file_type = self.combo_filetype.get()
         subject_detect = self.chk_subject_var.get()
+        safe_blur = self.chk_safe_blur_var.get()
         
         star_str = self.combo_star.get()
         rating_act: Optional[int] = None
@@ -357,7 +405,8 @@ class BlurScanDialog(ctk.CTkToplevel):
             pass
 
         if self.on_run:
-            self.on_run(perc, self.selected_method, flag_act, tag_act, rating_act, file_type, subject_detect)
+            eye_method = "auto"
+            self.on_run(perc, self.selected_method, flag_act, tag_act, rating_act, file_type, subject_detect, safe_blur, self.chk_clear_var.get(), eye_method)
 
         try:
             if self.master:

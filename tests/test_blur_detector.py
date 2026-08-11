@@ -61,41 +61,45 @@ class TestBlurDetector(unittest.TestCase):
 
     def test_return_box_with_none_image_returns_tuple(self):
         """
-        Verify that return_box=True with None image returns a (score, None) tuple,
+        Verify that return_box=True with None image returns a (score, (None, None)) tuple,
         not a bare float that would crash tuple unpacking.
         """
         result = calculate_sharpness(None, return_box=True)
         self.assertIsInstance(result, tuple, "return_box=True should always return a tuple")
-        score, box = result
+        score, dual_box = result
         self.assertEqual(score, 0.0)
-        self.assertIsNone(box)
+        self.assertIsInstance(dual_box, tuple)
+        self.assertIsNone(dual_box[0])
 
     def test_return_box_returns_tuple_for_all_methods(self):
         """
-        Verify that return_box=True returns a (score, box) tuple for all methods,
-        where box is either None or a 4-tuple of coordinates.
+        Verify that return_box=True returns a (score, (subject_box, eye_box)) tuple for all methods.
         """
         methods = ["laplacian", "ai_subject", "fft"]
         for method in methods:
             result = calculate_sharpness(self.sharp_img, method=method, return_box=True)
             self.assertIsInstance(result, tuple, f"return_box=True with method '{method}' should return a tuple")
-            score, box = result
+            score, dual_box = result
             self.assertIsInstance(score, float, f"Score should be float for method '{method}'")
-            if box is not None:
-                self.assertEqual(len(box), 4, f"Box should have 4 coordinates for method '{method}'")
+            self.assertIsInstance(dual_box, tuple, f"dual_box should be tuple for method '{method}'")
 
-    def test_yolo_subject_gray_none_returns_tuple(self):
+    def test_consolidated_eye_detection_methods(self):
         """
-        Verify that compute_ai_subject_sharpness with gray=None and return_box=True
-        returns a (score, box) tuple. This is the code path used by detect_subjects()
-        which only needs the bounding box, not sharpness scores.
+        Verify that both consolidated eye detection methods ('yolo' and 'simple') calculate scores and extract bounding boxes properly.
         """
-        from culler.detectors.blur.yolo_subject import compute_ai_subject_sharpness
-        result = compute_ai_subject_sharpness(None, self.sharp_img, return_box=True)
-        self.assertIsInstance(result, tuple, "gray=None with return_box=True must return a tuple, not a bare float")
-        score, box = result
-        self.assertIsInstance(score, float)
-        # box can be None (no YOLO model in test) or a 4-tuple
+        for eye_method in ["yolo", "simple"]:
+            result = calculate_sharpness(self.sharp_img, method="ai_subject", return_box=True, eye_detection_method=eye_method)
+            self.assertIsInstance(result, tuple)
+            score, dual_box = result
+            self.assertGreater(score, 0.0)
+            self.assertIsInstance(dual_box, tuple)
+
+            # Test extract_eye_face_box directly
+            from culler.detectors.blur.yolo_subject import extract_eye_face_box
+            subject_box = (10, 10, 190, 190)
+            eye_box = extract_eye_face_box(self.sharp_img, subject_box, method=eye_method)
+            self.assertIsNotNone(eye_box, f"Eye box for method '{eye_method}' should not be None")
+            self.assertEqual(len(eye_box), 4)
 
 
 if __name__ == "__main__":

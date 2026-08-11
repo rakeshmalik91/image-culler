@@ -53,7 +53,7 @@ class DatabaseManager:
                 )
             """)
 
-            # Migration check: Ensure tags and detection_box columns exist
+            # Migration check: Ensure tags, detection_box, and eye_box columns exist
             try:
                 cursor.execute("ALTER TABLE image_records ADD COLUMN tags TEXT DEFAULT ''")
             except sqlite3.OperationalError:
@@ -61,6 +61,11 @@ class DatabaseManager:
 
             try:
                 cursor.execute("ALTER TABLE image_records ADD COLUMN detection_box TEXT DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute("ALTER TABLE image_records ADD COLUMN eye_box TEXT DEFAULT ''")
             except sqlite3.OperationalError:
                 pass
 
@@ -218,6 +223,30 @@ class DatabaseManager:
     def set_blur_subject_detect(self, enabled: bool):
         self.set_setting("blur_subject_detect", str(enabled).lower())
 
+    def get_eye_detection_method(self) -> str:
+        val = self.get_setting("eye_detection_method", default="yolo").lower()
+        if val in ("yolo", "auto"):
+            return "yolo"
+        return "simple"
+
+    def set_eye_detection_method(self, method: str):
+        val = method.lower() if method else "yolo"
+        norm = "yolo" if val in ("yolo", "auto") else "simple"
+        self.set_setting("eye_detection_method", norm)
+
+    def get_clear_before_scan(self) -> bool:
+        return self.get_setting("clear_before_scan", default="True")
+
+    def set_clear_before_scan(self, enabled: bool):
+        self.set_setting("clear_before_scan", str(enabled).lower())
+
+    def get_safe_blur_scan(self) -> bool:
+        val = self.get_setting("safe_blur_scan", default="True")
+        return str(val).lower() in ("true", "1", "yes")
+
+    def set_safe_blur_scan(self, enabled: bool):
+        self.set_setting("safe_blur_scan", str(enabled).lower())
+
     # Duplicate Action Preferences
     def get_duplicate_flag_action(self) -> str:
         return self.get_setting("duplicate_flag_action", default="Reject")
@@ -239,20 +268,32 @@ class DatabaseManager:
 
     # --- Image Record Persistence & Cleanup API ---
 
-    def save_image_record(self, file_path: str, filename: str, flag: str, rating: int = 0, sharpness: float = 0.0, tags: str = "", detection_box: Optional[Tuple[float, float, float, float]] = None):
+    def save_image_record(
+        self,
+        file_path: str,
+        filename: str,
+        flag: str,
+        rating: int = 0,
+        sharpness: float = 0.0,
+        tags: str = "",
+        detection_box: Optional[Tuple[float, float, float, float]] = None,
+        eye_box: Optional[Tuple[float, float, float, float]] = None
+    ):
         box_str = json.dumps(list(detection_box)) if detection_box else ""
+        eye_str = json.dumps(list(eye_box)) if eye_box else ""
         with self._get_connection() as conn:
             conn.execute("""
-                INSERT INTO image_records (file_path, filename, flag, rating, sharpness, tags, detection_box)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO image_records (file_path, filename, flag, rating, sharpness, tags, detection_box, eye_box)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(file_path) DO UPDATE SET
                     flag = excluded.flag,
                     rating = excluded.rating,
                     sharpness = excluded.sharpness,
                     tags = excluded.tags,
                     detection_box = excluded.detection_box,
+                    eye_box = excluded.eye_box,
                     last_updated = CURRENT_TIMESTAMP
-            """, (file_path, filename, flag, rating, sharpness, tags, box_str))
+            """, (file_path, filename, flag, rating, sharpness, tags, box_str, eye_str))
             conn.commit()
 
     def get_all_records_for_dir(self, dir_path: str) -> Dict[str, Dict[str, Any]]:
@@ -271,6 +312,15 @@ class DatabaseManager:
                     except Exception:
                         box_val = None
 
+                eye_val = None
+                if "eye_box" in r.keys() and r["eye_box"]:
+                    try:
+                        parsed_eye = json.loads(r["eye_box"])
+                        if isinstance(parsed_eye, (list, tuple)) and len(parsed_eye) == 4:
+                            eye_val = (float(parsed_eye[0]), float(parsed_eye[1]), float(parsed_eye[2]), float(parsed_eye[3]))
+                    except Exception:
+                        eye_val = None
+
                 records[norm_key] = {
                     "filename": r["filename"],
                     "flag": r["flag"],
@@ -278,6 +328,7 @@ class DatabaseManager:
                     "sharpness": r["sharpness"],
                     "tags": r["tags"] if "tags" in r.keys() else "",
                     "detection_box": box_val,
+                    "eye_box": eye_val,
                 }
             return records
 

@@ -6,4 +6,5 @@ rich>=13.0.0
 customtkinter>=5.2.0
 numpy>=1.24.0
 ultralytics>=8.0.0
+mediapipe>=0.10.0
 pytest>=8.0.0

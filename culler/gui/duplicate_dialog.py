@@ -15,24 +15,26 @@ class DuplicateScanDialog(ctk.CTkToplevel):
     def __init__(
         self,
         master,
-        on_run: Callable[[float, str, str, Optional[str], Optional[int], str, str, Optional[str], Optional[int], str], None],
+        on_run: Callable[[float, str, str, Optional[str], Optional[int], str, str, Optional[str], Optional[int], str, bool], None],
         initial_threshold: float = 6.0,
         initial_method: str = "dhash",
         initial_flag_action: str = "Reject",
         initial_tag_action: str = "Duplicate",
         initial_rating_action: str = "None",
-        initial_file_type: str = "ARW"
+        initial_file_type: str = "ARW",
+        initial_clear_before_scan: bool = True
     ):
         super().__init__(master)
         self.on_run = on_run
         self.selected_method = initial_method if initial_method in DUP_METHODS_DATA else "dhash"
         self.selected_file_type = initial_file_type
+        self.selected_clear_before_scan = initial_clear_before_scan
         self.initial_flag_action = initial_flag_action
         self.initial_tag_action = initial_tag_action
         self.initial_rating_action = initial_rating_action
 
         self.title("👯 Scan for Duplicates Options")
-        self.geometry("880x620")
+        self.geometry("960x680")
         self.resizable(False, False)
 
         # Make modal dialog window
@@ -115,33 +117,33 @@ class DuplicateScanDialog(ctk.CTkToplevel):
         right_panel = ctk.CTkFrame(main_box, fg_color="transparent")
         right_panel.pack(side="right", fill="both", expand=True)
 
-        # Scrollable Method Details Card Box
-        self.card_info = ctk.CTkScrollableFrame(right_panel, corner_radius=6, fg_color="#222222", border_width=1, border_color="#383838", height=220)
-        self.card_info.pack(fill="both", expand=True, pady=(0, 6))
+        # Scrollable Method Details Card Box (Compact Height)
+        self.card_info = ctk.CTkScrollableFrame(right_panel, corner_radius=6, fg_color="#222222", border_width=1, border_color="#383838", height=215)
+        self.card_info.pack(fill="x", pady=(0, 4))
 
-        self.lbl_card_title = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=13, weight="bold"), text_color="#ffffff", anchor="w")
-        self.lbl_card_title.pack(anchor="w", padx=12, pady=(10, 2))
+        self.lbl_card_title = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=12, weight="bold"), text_color="#ffffff", anchor="w")
+        self.lbl_card_title.pack(anchor="w", padx=10, pady=(6, 1))
 
         self.lbl_card_speed = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=11, weight="bold"), text_color="#3a86ff", anchor="w")
-        self.lbl_card_speed.pack(anchor="w", padx=12, pady=2)
+        self.lbl_card_speed.pack(anchor="w", padx=10, pady=1)
 
-        self.lbl_card_how = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=11), text_color="#48cae4", justify="left", anchor="w", wraplength=510)
-        self.lbl_card_how.pack(anchor="w", padx=12, pady=2)
+        self.lbl_card_how = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=11), text_color="#48cae4", justify="left", anchor="w", wraplength=600)
+        self.lbl_card_how.pack(anchor="w", padx=10, pady=1)
 
-        self.lbl_card_detects = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=11), text_color="#dddddd", justify="left", anchor="w", wraplength=510)
-        self.lbl_card_detects.pack(anchor="w", padx=12, pady=2)
+        self.lbl_card_detects = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=11), text_color="#dddddd", justify="left", anchor="w", wraplength=600)
+        self.lbl_card_detects.pack(anchor="w", padx=10, pady=1)
 
-        self.lbl_card_pros = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=11), text_color="#2b9348", justify="left", anchor="w", wraplength=510)
-        self.lbl_card_pros.pack(anchor="w", padx=12, pady=2)
+        self.lbl_card_pros = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=11), text_color="#2b9348", justify="left", anchor="w", wraplength=600)
+        self.lbl_card_pros.pack(anchor="w", padx=10, pady=1)
 
-        self.lbl_card_cons = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=11), text_color="#d90429", justify="left", anchor="w", wraplength=510)
-        self.lbl_card_cons.pack(anchor="w", padx=12, pady=2)
+        self.lbl_card_cons = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=11), text_color="#d90429", justify="left", anchor="w", wraplength=600)
+        self.lbl_card_cons.pack(anchor="w", padx=10, pady=1)
 
-        self.lbl_card_guide = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=11), text_color="#a855f7", justify="left", anchor="w", wraplength=510)
-        self.lbl_card_guide.pack(anchor="w", padx=12, pady=2)
+        self.lbl_card_guide = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=11), text_color="#a855f7", justify="left", anchor="w", wraplength=600)
+        self.lbl_card_guide.pack(anchor="w", padx=10, pady=1)
 
-        self.lbl_card_best = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=11), text_color="#ffb703", justify="left", anchor="w", wraplength=510)
-        self.lbl_card_best.pack(anchor="w", padx=12, pady=(2, 10))
+        self.lbl_card_best = ctk.CTkLabel(self.card_info, text="", font=ctk.CTkFont(size=11), text_color="#ffb703", justify="left", anchor="w", wraplength=600)
+        self.lbl_card_best.pack(anchor="w", padx=10, pady=(1, 6))
 
         # Threshold Section
         self.lbl_thresh_title = ctk.CTkLabel(
@@ -318,6 +320,21 @@ class DuplicateScanDialog(ctk.CTkToplevel):
         self.combo_filetype.set(self.selected_file_type)
         self.combo_filetype.pack(side="left")
 
+        # Clear Before Scan Checkbox
+        self.f_clear = ctk.CTkFrame(right_panel, corner_radius=6, fg_color="#1a1a1a", border_width=1, border_color="#333333")
+        self.f_clear.pack(fill="x", pady=(6, 2))
+
+        self.chk_clear_var = ctk.BooleanVar(value=self.selected_clear_before_scan)
+        self.chk_clear = ctk.CTkCheckBox(
+            self.f_clear,
+            text="Clear flags, tags & bounding boxes before scan",
+            variable=self.chk_clear_var,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            checkbox_width=18,
+            checkbox_height=18
+        )
+        self.chk_clear.pack(anchor="w", padx=10, pady=(8, 8))
+
         # Bottom Button Bar
         btn_bar = ctk.CTkFrame(self, fg_color="transparent")
         btn_bar.pack(side="bottom", fill="x", padx=20, pady=12)
@@ -326,8 +343,8 @@ class DuplicateScanDialog(ctk.CTkToplevel):
             btn_bar,
             text="Cancel",
             width=90,
-            fg_color="#4a4e69",
-            hover_color="#22223b",
+            fg_color="#1f538d",
+            hover_color="#14375e",
             command=self.destroy
         )
         btn_cancel.pack(side="right", padx=4)
@@ -336,8 +353,8 @@ class DuplicateScanDialog(ctk.CTkToplevel):
             btn_bar,
             text="👯 Run Duplicate Scan",
             width=160,
-            fg_color="#d97706",
-            hover_color="#b45309",
+            fg_color="#1f538d",
+            hover_color="#14375e",
             font=ctk.CTkFont(weight="bold"),
             command=self._handle_run
         )
@@ -441,7 +458,7 @@ class DuplicateScanDialog(ctk.CTkToplevel):
             pass
 
         if self.on_run:
-            self.on_run(thresh, self.selected_method, flag_act, tag_act, rating_act, keeper_flag, keeper_tag, keeper_rating, keeper_method, file_type)
+            self.on_run(thresh, self.selected_method, flag_act, tag_act, rating_act, keeper_flag, keeper_tag, keeper_rating, keeper_method, file_type, self.chk_clear_var.get())
 
         try:
             if self.master:

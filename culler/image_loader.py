@@ -2,7 +2,7 @@ import io
 import os
 from collections import OrderedDict
 from pathlib import Path
-from typing import Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple, Union
 from PIL import Image, ImageOps
 
 # Register pillow_heif for HEIC / HEIF support
@@ -312,7 +312,49 @@ class ImageLoader:
         result.load()
         return result
 
-    def calculate_sharpness(self, pil_image_or_path: Union[Image.Image, str, Path], method: str = "laplacian") -> float:
+    def get_yolo_model(self) -> Optional[Any]:
+        """
+        Lazily loads and caches YOLO subject detection model (yolov8n.pt).
+        """
+        if not hasattr(self, "_yolo_model") or self._yolo_model is None:
+            try:
+                from ultralytics import YOLO
+                root_dir = Path(__file__).resolve().parent.parent
+                models_dir = root_dir / "lib" / "models"
+                models_dir.mkdir(parents=True, exist_ok=True)
+                model_path = models_dir / "yolov8n.pt"
+                if not model_path.exists():
+                    model_path = root_dir / "yolov8n.pt"
+                if not model_path.exists():
+                    model_path = Path("yolov8n.pt")
+                self._yolo_model = YOLO(str(model_path))
+            except Exception as e:
+                print(f"Error loading YOLO model: {e}")
+                self._yolo_model = None
+        return self._yolo_model
+
+    def get_yolo_pose_model(self) -> Optional[Any]:
+        """
+        Lazily loads and caches YOLO pose keypoint model (yolov8n-pose.pt) for eye detection.
+        """
+        if not hasattr(self, "_yolo_pose_model") or self._yolo_pose_model is None:
+            try:
+                from ultralytics import YOLO
+                root_dir = Path(__file__).resolve().parent.parent
+                models_dir = root_dir / "lib" / "models"
+                models_dir.mkdir(parents=True, exist_ok=True)
+                pose_path = models_dir / "yolov8n-pose.pt"
+                if not pose_path.exists():
+                    pose_path = root_dir / "yolov8n-pose.pt"
+                if not pose_path.exists():
+                    pose_path = Path("yolov8n-pose.pt")
+                self._yolo_pose_model = YOLO(str(pose_path))
+            except Exception as e:
+                print(f"Error loading YOLO pose model: {e}")
+                self._yolo_pose_model = None
+        return self._yolo_pose_model
+
+    def calculate_sharpness(self, pil_image_or_path: Union[Image.Image, str, Path], method: str = "laplacian", eye_detection_method: str = "yolo") -> float:
         """
         Calculate sharpness score using selected algorithm via culler.detectors.blur_detector module.
         """
@@ -326,8 +368,15 @@ class ImageLoader:
             if img is None:
                 return 0.0
 
-            yolo_model = getattr(self, "_yolo_model", None)
-            score = calc_blur(img, method=method, yolo_model=yolo_model)
+            yolo_model = self.get_yolo_model()
+            yolo_pose_model = self.get_yolo_pose_model() if eye_detection_method == "yolo" else None
+            score = calc_blur(
+                img,
+                method=method,
+                yolo_model=yolo_model,
+                eye_detection_method=eye_detection_method,
+                yolo_pose_model=yolo_pose_model
+            )
             return score
         except Exception as e:
             print(f"Error computing sharpness: {e}")
