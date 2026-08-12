@@ -14,15 +14,18 @@ class ProgressDialog(ctk.CTkToplevel):
         master,
         title_text: str = "Scanning Directory...",
         header_text: str = "🔍 Running Analysis Scan...",
-        on_cancel: Optional[Callable[[], None]] = None
+        on_cancel: Optional[Callable[[], None]] = None,
+        count_label: str = "Photos"
     ):
         super().__init__(master)
         self.on_cancel_callback = on_cancel
         self.is_cancelled = False
         self.start_time = time.time()
+        self.count_label = count_label
+        self.training_photo_count: Optional[int] = None
 
         self.title(title_text)
-        self.geometry("480x230")
+        self.geometry("480x260")
         self.resizable(False, False)
 
         # Make modal dialog window
@@ -70,7 +73,9 @@ class ProgressDialog(ctk.CTkToplevel):
             text="Preparing scan...",
             font=ctk.CTkFont(size=11),
             text_color="#cccccc",
-            anchor="w"
+            anchor="w",
+            wraplength=440,
+            justify="left"
         )
         self.lbl_item.pack(fill="x", padx=20, pady=(0, 8))
 
@@ -82,11 +87,20 @@ class ProgressDialog(ctk.CTkToplevel):
         # Counts & Percentage Row
         self.lbl_counts = ctk.CTkLabel(
             self,
-            text="Photos: 0 / 0 (0%)",
+            text=f"{self.count_label}: 0 / 0 (0%)",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="#ffffff"
         )
         self.lbl_counts.pack(anchor="w", padx=20, pady=(6, 2))
+
+        self.lbl_photo_count = ctk.CTkLabel(
+            self,
+            text="",
+            font=ctk.CTkFont(size=10),
+            text_color="#aaaaaa",
+            anchor="w"
+        )
+        self.lbl_photo_count.pack(anchor="w", padx=20, pady=(0, 2))
 
         # Time Elapsed / ETA Row
         self.lbl_time = ctk.CTkLabel(
@@ -112,6 +126,16 @@ class ProgressDialog(ctk.CTkToplevel):
             command=self._handle_cancel
         )
         self.btn_cancel.pack(side="right")
+
+    def set_count_label(self, label: str):
+        self.count_label = label
+
+    def set_training_photo_count(self, count: Optional[int]):
+        self.training_photo_count = count
+        if count is not None and count > 0:
+            self.lbl_photo_count.configure(text=f"Training on {count} photos")
+        else:
+            self.lbl_photo_count.configure(text="")
 
     def update_progress(self, completed: int, total: int, current_filename: str = ""):
         """
@@ -141,12 +165,12 @@ class ProgressDialog(ctk.CTkToplevel):
         else:
             eta_str = "Calculating..."
 
-        fn_display = current_filename if len(current_filename) <= 45 else f"...{current_filename[-42:]}"
+        fn_display = current_filename if len(current_filename) <= 150 else f"...{current_filename[-147:]}"
 
         try:
             self.progress_bar.set(pct)
             self.lbl_item.configure(text=f"Processing: {fn_display}" if fn_display else "Scanning...")
-            self.lbl_counts.configure(text=f"Photos: {completed} / {total} ({int(pct * 100)}%)")
+            self.lbl_counts.configure(text=f"{self.count_label}: {completed} / {total} ({int(pct * 100)}%)")
             self.lbl_time.configure(text=f"⏱️ Elapsed: {elapsed_str}   |   ⌛ Remaining: {eta_str} ({remaining_items} left)")
         except Exception:
             pass

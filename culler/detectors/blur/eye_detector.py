@@ -32,12 +32,8 @@ def detect_eye_yolo_pose(
             root_dir = Path(__file__).resolve().parent.parent.parent.parent
             models_dir = root_dir / "lib" / "models"
             pose_path = models_dir / "yolov8n-pose.pt"
-            if not pose_path.exists():
-                pose_path = root_dir / "yolov8n-pose.pt"
-            if not pose_path.exists():
-                pose_path = Path("yolov8n-pose.pt")
-            if pose_path.exists():
-                yolo_pose_model = YOLO(str(pose_path))
+            # Ultralytics will automatically download to base_model_path if it doesn't exist
+            yolo_pose_model = YOLO(str(pose_path))
         except Exception:
             pass
 
@@ -82,12 +78,8 @@ def detect_eye_yolo_bbox(
             eye_path = models_dir / "yolov8n-eye.pt"
             if not eye_path.exists():
                 eye_path = models_dir / "yolov8n.pt"
-            if not eye_path.exists():
-                eye_path = root_dir / "yolov8n.pt"
-            if not eye_path.exists():
-                eye_path = Path("yolov8n.pt")
-            if eye_path.exists():
-                yolo_eye_model = YOLO(str(eye_path))
+                # Ultralytics will automatically download to base_model_path if it doesn't exist
+            yolo_eye_model = YOLO(str(eye_path))
         except Exception:
             pass
 

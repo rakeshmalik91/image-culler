@@ -1,5 +1,11 @@
 import os
 import sys
+import warnings
+
+# Suppress known upstream third-party FutureWarning (e.g. Keras/TF np.object warning)
+warnings.filterwarnings("ignore", category=FutureWarning, module="keras.*")
+warnings.filterwarnings("ignore", message=".*np\\.object.*", category=FutureWarning)
+
 import threading
 import tkinter as tk
 from tkinter import filedialog as fd, messagebox as mb, simpledialog
@@ -12,6 +18,8 @@ from PIL import Image
 
 from culler.culler_engine import CullingSession, ImageItem, FlagState
 from culler.db_manager import DatabaseManager
+from culler.dataset_exporter import save_annotation
+from culler.ml_trainer import train_custom_yolo
 from culler.gui import HeaderToolbar, ThumbnailList, ImageCanvasViewer, MetadataPanel, MetadataCleanupDialog, SettingsDialog, BlurScanDialog, DuplicateScanDialog, ProgressDialog, TabBar
 from culler.logger import log_info, log_debug, log_error
 
@@ -498,6 +506,7 @@ class ImageCullerApp(ctk.CTk):
             on_unrate_all=self._on_unrate_all,
             on_clear_all=self._on_clear_all,
             on_crop=self._on_trigger_crop,
+            on_annotate=self._on_trigger_annotate,
             on_convert_jpg=self._on_convert_jpg,
             on_move_picked=self._on_move_picked,
             on_move_rejected=self._on_move_rejected,
@@ -599,12 +608,26 @@ class ImageCullerApp(ctk.CTk):
         self.bind("<KP_Enter>", lambda e: self._on_return_pressed())
         self.bind("<Escape>", lambda e: self._on_escape_pressed())
 
+        self.bind("b", lambda e: self._on_trigger_annotate())
+        self.bind("B", lambda e: self._on_trigger_annotate())
+
         for star in range(6):
             self.bind(str(star), lambda e, s=star: self._set_current_rating(s))
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _on_close(self):
+        try:
+            import glob
+            import os
+            for f in glob.glob("yolo*.pt"):
+                try:
+                    os.remove(f)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+            
         try:
             is_max = (self.state() == "zoomed")
             w = self.winfo_width()
@@ -1000,8 +1023,9 @@ class ImageCullerApp(ctk.CTk):
         if req_id is not None and req_id != self._load_request_id:
             return
         self.viewer.set_image(pil_img)
-        if getattr(item, 'detection_box', None) or getattr(item, 'eye_box', None):
-            self.viewer.set_detection_box(item.detection_box, item.eye_box)
+        show_boxes = self.db.get_show_bounding_boxes() if self.db else True
+        if show_boxes and (getattr(item, 'detection_box', None) or getattr(item, 'eye_box', None) or getattr(item, 'manual_detection_box', None) or getattr(item, 'manual_eye_box', None)):
+            self.viewer.set_detection_box(item.detection_box, item.eye_box, item.manual_detection_box, item.manual_eye_box)
         else:
             self.viewer.clear_detection_box()
         self.meta_panel.update_metadata(item)
@@ -1249,7 +1273,7 @@ class ImageCullerApp(ctk.CTk):
         prog_dialog = ProgressDialog(
             self,
             title_text="🔍 Scan for Blur Progress",
-            header_text=f"🔍 Scanning Blurry Photos ({method.upper()})...",
+            header_text=f"🔍 Scanning for Blurry Photos ({method.upper()})...",
             on_cancel=lambda: cancel_event.set()
         )
 
@@ -1261,6 +1285,44 @@ class ImageCullerApp(ctk.CTk):
             session = self._get_active_session()
             if not session:
                 return
+
+            dataset_yaml = Path("_DATASET/dataset.yaml")
+            needs_training = Path("_DATASET/.needs_training")
+            custom_model = Path("lib/models/yolo_custom.pt")
+            
+            should_train = dataset_yaml.exists() and needs_training.exists()
+            if should_train:
+                self.after(0, lambda: prog_dialog.set_count_label("Epoch"))
+                train_dir = Path("_DATASET/images/train")
+                photo_count = sum(1 for f in train_dir.iterdir() if f.is_file()) if train_dir.exists() else 0
+                self.after(0, lambda: prog_dialog.set_training_photo_count(photo_count))
+                self.after(0, lambda: prog_dialog.update_progress(0, 100, "Fine-tuning Custom YOLO Model (This may take a few minutes)..."))
+                def on_prog(*args):
+                    if len(args) == 3:
+                        c, t, msg = args
+                        self.after(0, lambda c=c, t=t, m=msg: prog_dialog.update_progress(c, t, f"Training: {m}"))
+                    elif len(args) == 1:
+                        m = args[0]
+                        self.after(0, lambda m=m: prog_dialog.update_progress(0, 100, f"Training: {m}"))
+                    log_info(f"Training Progress: {args}")
+                
+                success = train_custom_yolo(
+                    dataset_dir="_DATASET",
+                    epochs=25,
+                    on_progress=on_prog,
+                    sync=True
+                )
+                if success:
+                    needs_training.unlink(missing_ok=True)
+                    if hasattr(session, "image_loader"):
+                        session.image_loader._yolo_model = None
+
+            if cancel_event.is_set():
+                return
+
+            self.after(0, lambda: prog_dialog.set_count_label("Photos"))
+            self.after(0, lambda: prog_dialog.set_training_photo_count(None))
+
             flagged = session.scan_for_blur(
                 bottom_percentile=bottom_percentile,
                 method=method,
@@ -1298,8 +1360,9 @@ class ImageCullerApp(ctk.CTk):
 
         if subject_detect and self.current_items and 0 <= self.current_index < len(self.current_items):
             cur_item = self.current_items[self.current_index]
-            if cur_item.detection_box or cur_item.eye_box:
-                self.viewer.set_detection_box(cur_item.detection_box, cur_item.eye_box)
+            show_boxes = self.db.get_show_bounding_boxes() if self.db else True
+            if show_boxes and (cur_item.detection_box or cur_item.eye_box or getattr(cur_item, 'manual_detection_box', None) or getattr(cur_item, 'manual_eye_box', None)):
+                self.viewer.set_detection_box(cur_item.detection_box, cur_item.eye_box, cur_item.manual_detection_box, cur_item.manual_eye_box)
             else:
                 self.viewer.clear_detection_box()
 
@@ -1466,10 +1529,84 @@ class ImageCullerApp(ctk.CTk):
         if hasattr(self, "viewer") and self.viewer.is_cropping:
             self.viewer.exit_crop_mode()
             self._update_status("Cancelled Manual Crop Mode.")
+        elif hasattr(self, "viewer") and getattr(self.viewer, "is_annotating", False):
+            self.viewer.exit_anno_mode()
+            self._update_status("Cancelled Annotation Mode.")
 
     def _on_return_pressed(self):
         if hasattr(self, "viewer") and self.viewer.is_cropping:
             self.viewer._on_confirm_crop()
+        elif hasattr(self, "viewer") and getattr(self.viewer, "is_annotating", False):
+            self.viewer._on_confirm_anno()
+
+    def _on_trigger_annotate(self):
+        if self.current_index < 0 or not self.current_items:
+            return
+        if getattr(self.viewer, "is_annotating", False):
+            self.viewer.exit_anno_mode()
+            self._update_status("Cancelled YOLO Annotation Mode.")
+        else:
+            item = self.current_items[self.current_index]
+            self.viewer.enter_anno_mode(str(item.path), on_save_callback=self._on_save_annotate)
+            self._update_status("Entered Annotation Mode. Draw boxes and click Save.")
+
+    def _on_save_annotate(self, image_path: str, img_w: int, img_h: int, s_box: tuple, e_box: tuple, pil_image=None):
+        success = save_annotation(image_path, img_w, img_h, s_box, e_box, pil_image=pil_image)
+        if success:
+            Path("_DATASET/.needs_training").touch()
+            self._update_status(f"✅ Saved YOLO annotations for {Path(image_path).name} to _DATASET")
+            
+            # Save the manual boxes back to the DB and display them in the viewer
+            if self.current_items and 0 <= self.current_index < len(self.current_items):
+                item = self.current_items[self.current_index]
+                if str(item.path) == image_path:
+                    # s_box and e_box are normalized (x,y,w,h) strings usually?
+                    # Wait! In gui.py _on_save_annotate, s_box is a tuple of (x1, y1, x2, y2) normalized?
+                    # No, s_box is in original pixel coordinates? No, wait!
+                    # What is s_box? In gui.py: _on_save_annotate(image_path, img_w, img_h, s_box, e_box).
+                    # save_annotation normalizes them. So s_box is (px_x1, px_y1, px_x2, px_y2).
+                    # detection_box in ImageItem expects normalized (nx1, ny1, nx2, ny2).
+                    
+                    if s_box:
+                        x1, y1, x2, y2 = s_box
+                        item.manual_detection_box = (x1/img_w, y1/img_h, x2/img_w, y2/img_h)
+                    else:
+                        item.manual_detection_box = None
+                        
+                    if e_box:
+                        ex1, ey1, ex2, ey2 = e_box
+                        item.manual_eye_box = (ex1/img_w, ey1/img_h, ex2/img_w, ey2/img_h)
+                    else:
+                        item.manual_eye_box = None
+                        
+                    item.add_tag("Manual-Anno")
+                    
+                    session = self._get_active_session()
+                    if session and self.db:
+                        import json
+                        self.db.save_image_record(
+                            file_path=str(item.path),
+                            filename=item.filename,
+                            flag=item.flag.value,
+                            rating=item.rating,
+                            sharpness=item.sharpness_score,
+                            tags=json.dumps(list(item.tags)) if item.tags else "",
+                            detection_box=item.detection_box,
+                            eye_box=item.eye_box,
+                            manual_detection_box=item.manual_detection_box,
+                            manual_eye_box=item.manual_eye_box
+                        )
+                        
+                    show_boxes = self.db.get_show_bounding_boxes() if self.db else True
+                    if show_boxes:
+                        self.viewer.set_detection_box(item.detection_box, item.eye_box, item.manual_detection_box, item.manual_eye_box)
+                    else:
+                        self.viewer.clear_detection_box()
+                    self.meta_panel.refresh_tag_buttons(self.db.get_custom_tags() if self.db else [])
+                    self.meta_panel.update_metadata(item)
+                    
+        else:
+            mb.showerror("Annotation Error", "Failed to save annotations.")
 
     def _on_save_crop(self, pct_x1: float, pct_y1: float, pct_x2: float, pct_y2: float):
         session = self._get_active_session()
@@ -1812,6 +1949,15 @@ class ImageCullerApp(ctk.CTk):
         custom_tags = self.db.get_custom_tags()
         self.meta_panel.refresh_tag_buttons(custom_tags)
         self.toolbar.update_tag_options(custom_tags)
+
+        # Update viewer bounding boxes based on new settings
+        if self.current_items and 0 <= self.current_index < len(self.current_items):
+            item = self.current_items[self.current_index]
+            show_boxes = self.db.get_show_bounding_boxes()
+            if show_boxes and (getattr(item, 'detection_box', None) or getattr(item, 'eye_box', None) or getattr(item, 'manual_detection_box', None) or getattr(item, 'manual_eye_box', None)):
+                self.viewer.set_detection_box(item.detection_box, item.eye_box, item.manual_detection_box, item.manual_eye_box)
+            else:
+                self.viewer.clear_detection_box()
 
         tab = self._get_active_tab()
         if tab and tab["session"].directory:

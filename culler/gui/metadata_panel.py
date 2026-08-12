@@ -22,6 +22,7 @@ class MetadataPanel(ctk.CTkFrame):
         on_unrate_all: Optional[Callable[[], None]] = None,
         on_clear_all: Optional[Callable[[], None]] = None,
         on_crop: Optional[Callable[[], None]] = None,
+        on_annotate: Optional[Callable[[], None]] = None,
         on_convert_jpg: Optional[Callable[[], None]] = None,
         on_move_picked: Optional[Callable[[], None]] = None,
         on_move_rejected: Optional[Callable[[], None]] = None,
@@ -41,6 +42,7 @@ class MetadataPanel(ctk.CTkFrame):
         self.on_unrate_all = on_unrate_all
         self.on_clear_all = on_clear_all
         self.on_crop = on_crop
+        self.on_annotate = on_annotate
         self.on_convert_jpg = on_convert_jpg
         self.on_move_picked = on_move_picked
         self.on_move_rejected = on_move_rejected
@@ -238,6 +240,19 @@ class MetadataPanel(ctk.CTkFrame):
             )
             self.btn_crop.pack(fill="x", pady=2)
             ToolTip(self.btn_crop, "Shortcut: C (Crop - Hold Shift for 1:1 Square)")
+
+        if self.on_annotate:
+            self.btn_annotate = ctk.CTkButton(
+                self.move_box,
+                text="🎯 Correct Bounding Box",
+                fg_color="#a37a00",
+                hover_color="#7a5c00",
+                text_color="#ffffff",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                command=self.on_annotate
+            )
+            self.btn_annotate.pack(fill="x", pady=2)
+            ToolTip(self.btn_annotate, "Shortcut: B (Draw subject and eye boxes to correct AI)")
 
         if self.on_convert_jpg:
             self.btn_convert_jpg = ctk.CTkButton(

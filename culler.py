@@ -1,5 +1,10 @@
 import argparse
 import sys
+import warnings
+
+# Suppress known upstream third-party FutureWarning (e.g. Keras/TF np.object warning)
+warnings.filterwarnings("ignore", category=FutureWarning, module="keras.*")
+warnings.filterwarnings("ignore", message=".*np\\.object.*", category=FutureWarning)
 from pathlib import Path
 from rich.console import Console
 from rich.table import Table

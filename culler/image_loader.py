@@ -323,10 +323,7 @@ class ImageLoader:
                 models_dir = root_dir / "lib" / "models"
                 models_dir.mkdir(parents=True, exist_ok=True)
                 model_path = models_dir / "yolov8n.pt"
-                if not model_path.exists():
-                    model_path = root_dir / "yolov8n.pt"
-                if not model_path.exists():
-                    model_path = Path("yolov8n.pt")
+                # Ultralytics will automatically download to model_path if it doesn't exist
                 self._yolo_model = YOLO(str(model_path))
             except Exception as e:
                 print(f"Error loading YOLO model: {e}")
@@ -344,10 +341,7 @@ class ImageLoader:
                 models_dir = root_dir / "lib" / "models"
                 models_dir.mkdir(parents=True, exist_ok=True)
                 pose_path = models_dir / "yolov8n-pose.pt"
-                if not pose_path.exists():
-                    pose_path = root_dir / "yolov8n-pose.pt"
-                if not pose_path.exists():
-                    pose_path = Path("yolov8n-pose.pt")
+                # Ultralytics will automatically download to pose_path if it doesn't exist
                 self._yolo_pose_model = YOLO(str(pose_path))
             except Exception as e:
                 print(f"Error loading YOLO pose model: {e}")

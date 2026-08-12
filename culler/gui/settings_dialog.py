@@ -28,8 +28,9 @@ class SettingsDialog(ctk.CTkToplevel):
         self.on_sync_exif = on_sync_exif
 
         self.title("⚙️ Application Settings")
-        self.geometry("520x560")
-        self.resizable(False, False)
+        self.geometry("540x640")
+        self.minsize(500, 520)
+        self.resizable(True, True)
 
         # Make modal dialog window
         self.transient(master)
@@ -61,27 +62,9 @@ class SettingsDialog(ctk.CTkToplevel):
             pass
 
     def _build_widgets(self):
-        # Header Label
-        lbl_title = ctk.CTkLabel(
-            self,
-            text="⚙️ Global Application Settings",
-            font=ctk.CTkFont(size=16, weight="bold")
-        )
-        lbl_title.pack(side="top", pady=(15, 5))
-
-        # Tabview
-        self.tabview = ctk.CTkTabview(self, width=480, height=410)
-        self.tabview.pack(side="top", fill="both", expand=True, padx=15, pady=5)
-
-        self.tabview.add("General")
-        self.tabview.add("Tags")
-
-        self._build_general_tab(self.tabview.tab("General"))
-        self._build_tags_tab(self.tabview.tab("Tags"))
-
-        # Bottom Button Bar
+        # Bottom Button Bar (packed FIRST with side="bottom" so Save and Cancel buttons are always visible)
         btn_bar = ctk.CTkFrame(self, fg_color="transparent")
-        btn_bar.pack(side="bottom", fill="x", padx=20, pady=15)
+        btn_bar.pack(side="bottom", fill="x", padx=20, pady=12)
 
         btn_cancel = ctk.CTkButton(
             btn_bar,
@@ -96,7 +79,7 @@ class SettingsDialog(ctk.CTkToplevel):
         btn_save = ctk.CTkButton(
             btn_bar,
             text="💾 Save Settings",
-            width=120,
+            width=130,
             fg_color="#2b9348",
             hover_color="#1b4332",
             font=ctk.CTkFont(weight="bold"),
@@ -104,8 +87,26 @@ class SettingsDialog(ctk.CTkToplevel):
         )
         btn_save.pack(side="right", padx=4)
 
+        # Header Label
+        lbl_title = ctk.CTkLabel(
+            self,
+            text="⚙️ Global Application Settings",
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        lbl_title.pack(side="top", pady=(15, 5))
+
+        # Tabview
+        self.tabview = ctk.CTkTabview(self, width=500)
+        self.tabview.pack(side="top", fill="both", expand=True, padx=15, pady=(5, 5))
+
+        self.tabview.add("General")
+        self.tabview.add("Tags")
+
+        self._build_general_tab(self.tabview.tab("General"))
+        self._build_tags_tab(self.tabview.tab("Tags"))
+
     def _build_general_tab(self, tab):
-        container = ctk.CTkFrame(tab, fg_color="transparent")
+        container = ctk.CTkScrollableFrame(tab, fg_color="transparent")
         container.pack(side="top", fill="both", expand=True, padx=5, pady=5)
 
         # ----------------------------------------------------
@@ -243,6 +244,17 @@ class SettingsDialog(ctk.CTkToplevel):
         else:
             self.chk_stack.deselect()
         self.chk_stack.pack(anchor="w", pady=4)
+        
+        self.chk_bbox = ctk.CTkCheckBox(
+            container,
+            text="Show Bounding Boxes (AI & Manual)",
+            font=ctk.CTkFont(size=11, weight="bold")
+        )
+        if self.db.get_show_bounding_boxes():
+            self.chk_bbox.select()
+        else:
+            self.chk_bbox.deselect()
+        self.chk_bbox.pack(anchor="w", pady=4)
 
         # ----------------------------------------------------
         # Section 4: Tools & Maintenance Actions
@@ -468,8 +480,9 @@ class SettingsDialog(ctk.CTkToplevel):
         eye_val = eye_display.get(self.opt_eye.get(), "yolo")
         self.db.set_eye_detection_method(eye_val)
 
-        # 4. Stack RAW+JPG
+        # 4. Stack RAW+JPG & Show Bounding Boxes
         self.db.set_stack_raw_jpg(bool(self.chk_stack.get()))
+        self.db.set_show_bounding_boxes(bool(self.chk_bbox.get()))
 
         # 5. Custom tags
         self.db.set_custom_tags(self._custom_tags)

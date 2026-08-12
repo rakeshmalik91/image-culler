@@ -49,6 +49,8 @@ class ImageItem:
         self.metadata: Dict[str, Any] = {}
         self.detection_box: Optional[Tuple[float, float, float, float]] = None
         self.eye_box: Optional[Tuple[float, float, float, float]] = None
+        self.manual_detection_box: Optional[Tuple[float, float, float, float]] = None
+        self.manual_eye_box: Optional[Tuple[float, float, float, float]] = None
 
     @property
     def tags_str(self) -> str:
@@ -257,6 +259,10 @@ class CullingSession:
                     item.detection_box = rec["detection_box"]
                 if rec.get("eye_box"):
                     item.eye_box = rec["eye_box"]
+                if rec.get("manual_detection_box"):
+                    item.manual_detection_box = rec["manual_detection_box"]
+                if rec.get("manual_eye_box"):
+                    item.manual_eye_box = rec["manual_eye_box"]
 
             if progress_callback:
                 try:
@@ -280,7 +286,9 @@ class CullingSession:
                     sharpness=item.sharpness_score,
                     tags=item.tags_str,
                     detection_box=item.detection_box,
-                    eye_box=item.eye_box
+                    eye_box=item.eye_box,
+                    manual_detection_box=item.manual_detection_box,
+                    manual_eye_box=item.manual_eye_box
                 )
 
     def unflag_all_items(self) -> int:

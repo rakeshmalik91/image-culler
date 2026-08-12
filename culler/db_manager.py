@@ -69,6 +69,16 @@ class DatabaseManager:
             except sqlite3.OperationalError:
                 pass
 
+            try:
+                cursor.execute("ALTER TABLE image_records ADD COLUMN manual_detection_box TEXT DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute("ALTER TABLE image_records ADD COLUMN manual_eye_box TEXT DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass
+
             conn.commit()
 
     # --- App Settings & Window State API ---
@@ -143,6 +153,13 @@ class DatabaseManager:
 
     def set_stack_raw_jpg(self, enabled: bool):
         self.set_setting("stack_raw_jpg", enabled)
+
+    def get_show_bounding_boxes(self) -> bool:
+        val = self.get_setting("show_bounding_boxes", default=True)
+        return str(val).lower() in ("true", "1", "yes")
+
+    def set_show_bounding_boxes(self, show: bool):
+        self.set_setting("show_bounding_boxes", str(show).lower())
 
     def get_custom_tags(self) -> list:
         """Get user-defined custom tags from settings."""
@@ -277,14 +294,18 @@ class DatabaseManager:
         sharpness: float = 0.0,
         tags: str = "",
         detection_box: Optional[Tuple[float, float, float, float]] = None,
-        eye_box: Optional[Tuple[float, float, float, float]] = None
+        eye_box: Optional[Tuple[float, float, float, float]] = None,
+        manual_detection_box: Optional[Tuple[float, float, float, float]] = None,
+        manual_eye_box: Optional[Tuple[float, float, float, float]] = None
     ):
         box_str = json.dumps(list(detection_box)) if detection_box else ""
         eye_str = json.dumps(list(eye_box)) if eye_box else ""
+        m_box_str = json.dumps(list(manual_detection_box)) if manual_detection_box else ""
+        m_eye_str = json.dumps(list(manual_eye_box)) if manual_eye_box else ""
         with self._get_connection() as conn:
             conn.execute("""
-                INSERT INTO image_records (file_path, filename, flag, rating, sharpness, tags, detection_box, eye_box)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO image_records (file_path, filename, flag, rating, sharpness, tags, detection_box, eye_box, manual_detection_box, manual_eye_box)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(file_path) DO UPDATE SET
                     flag = excluded.flag,
                     rating = excluded.rating,
@@ -292,8 +313,10 @@ class DatabaseManager:
                     tags = excluded.tags,
                     detection_box = excluded.detection_box,
                     eye_box = excluded.eye_box,
+                    manual_detection_box = excluded.manual_detection_box,
+                    manual_eye_box = excluded.manual_eye_box,
                     last_updated = CURRENT_TIMESTAMP
-            """, (file_path, filename, flag, rating, sharpness, tags, box_str, eye_str))
+            """, (file_path, filename, flag, rating, sharpness, tags, box_str, eye_str, m_box_str, m_eye_str))
             conn.commit()
 
     def get_all_records_for_dir(self, dir_path: str) -> Dict[str, Dict[str, Any]]:
@@ -330,6 +353,28 @@ class DatabaseManager:
                     "detection_box": box_val,
                     "eye_box": eye_val,
                 }
+                
+                # Also load manual boxes if they exist
+                if "manual_detection_box" in r.keys() and r["manual_detection_box"]:
+                    try:
+                        parsed = json.loads(r["manual_detection_box"])
+                        if isinstance(parsed, (list, tuple)) and len(parsed) == 4:
+                            records[norm_key]["manual_detection_box"] = (float(parsed[0]), float(parsed[1]), float(parsed[2]), float(parsed[3]))
+                    except Exception:
+                        records[norm_key]["manual_detection_box"] = None
+                else:
+                    records[norm_key]["manual_detection_box"] = None
+                    
+                if "manual_eye_box" in r.keys() and r["manual_eye_box"]:
+                    try:
+                        parsed = json.loads(r["manual_eye_box"])
+                        if isinstance(parsed, (list, tuple)) and len(parsed) == 4:
+                            records[norm_key]["manual_eye_box"] = (float(parsed[0]), float(parsed[1]), float(parsed[2]), float(parsed[3]))
+                    except Exception:
+                        records[norm_key]["manual_eye_box"] = None
+                else:
+                    records[norm_key]["manual_eye_box"] = None
+                    
             return records
 
     def cleanup_folder_metadata(self, folder_path: str) -> int:

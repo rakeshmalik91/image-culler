@@ -33,6 +33,19 @@ class ImageCanvasViewer(ctk.CTkFrame):
         self.crop_rect_id: Optional[int] = None
         self.on_confirm_crop_cb = None
 
+        # Annotation Mode Variables
+        self.is_annotating: bool = False
+        self.anno_class: str = "Subject"
+        self.anno_subject_box_px: Optional[Tuple[float, float, float, float]] = None
+        self.anno_eye_box_px: Optional[Tuple[float, float, float, float]] = None
+        self.anno_drag_start_x: float = 0.0
+        self.anno_drag_start_y: float = 0.0
+        self.anno_drag_rect_id: Optional[int] = None
+        self.anno_subject_rect_id: Optional[int] = None
+        self.anno_eye_rect_id: Optional[int] = None
+        self.on_save_anno_cb = None
+        self.current_image_path = None
+
         # Subject Detection Box
         self._detection_box: Optional[Tuple[float, float, float, float]] = None
         self._detection_rect_id: Optional[int] = None
@@ -43,6 +56,9 @@ class ImageCanvasViewer(ctk.CTkFrame):
         self.canvas.bind("<ButtonPress-1>", self._on_drag_start)
         self.canvas.bind("<B1-Motion>", self._on_drag_motion)
         self.canvas.bind("<ButtonRelease-1>", self._on_drag_release)
+        self.canvas.bind("<ButtonPress-3>", self._on_right_drag_start)
+        self.canvas.bind("<B3-Motion>", self._on_right_drag_motion)
+        self.canvas.bind("<ButtonRelease-3>", self._on_right_drag_release)
         self.canvas.bind("<MouseWheel>", self._on_zoom)
         self.canvas.bind("<Double-Button-1>", self._on_double_click)
         self.canvas.bind("<Configure>", lambda e: self.redraw(force_resize=True))
@@ -54,6 +70,10 @@ class ImageCanvasViewer(ctk.CTkFrame):
         # Top Crop Toolbar Overlay
         self.crop_toolbar: Optional[ctk.CTkFrame] = None
         self._create_crop_toolbar()
+
+        # Top Annotation Toolbar Overlay
+        self.anno_toolbar: Optional[ctk.CTkFrame] = None
+        self._create_anno_toolbar()
 
     def _create_loading_overlay(self):
         self.overlay_frame = ctk.CTkFrame(
@@ -124,30 +144,55 @@ class ImageCanvasViewer(ctk.CTkFrame):
 
     def set_detection_box(
         self,
-        box: Optional[Tuple[float, float, float, float]],
-        eye_box: Optional[Tuple[float, float, float, float]] = None
+        ai_box: Optional[Tuple[float, float, float, float]],
+        ai_eye_box: Optional[Tuple[float, float, float, float]] = None,
+        manual_box: Optional[Tuple[float, float, float, float]] = None,
+        manual_eye_box: Optional[Tuple[float, float, float, float]] = None
     ):
-        self._detection_box = box
-        self._eye_box = getattr(self, "_eye_box", None) if eye_box is None and box is None else eye_box
+        self._ai_box = ai_box
+        self._ai_eye_box = ai_eye_box
+        self._manual_box = manual_box
+        self._manual_eye_box = manual_eye_box
         self._draw_detection_rect()
 
     def clear_detection_box(self):
-        self._detection_box = None
-        self._eye_box = None
-        if getattr(self, "_detection_rect_id", None) is not None:
-            self.canvas.delete(self._detection_rect_id)
-            self._detection_rect_id = None
-        if getattr(self, "_eye_rect_id", None) is not None:
-            self.canvas.delete(self._eye_rect_id)
-            self._eye_rect_id = None
+        self._ai_box = None
+        self._ai_eye_box = None
+        self._manual_box = None
+        self._manual_eye_box = None
+        
+        # Clear AI rects
+        if getattr(self, "_ai_rect_id", None) is not None:
+            self.canvas.delete(self._ai_rect_id)
+            self._ai_rect_id = None
+        if getattr(self, "_ai_eye_rect_id", None) is not None:
+            self.canvas.delete(self._ai_eye_rect_id)
+            self._ai_eye_rect_id = None
+            
+        # Clear Manual rects
+        if getattr(self, "_manual_rect_id", None) is not None:
+            self.canvas.delete(self._manual_rect_id)
+            self._manual_rect_id = None
+        if getattr(self, "_manual_eye_rect_id", None) is not None:
+            self.canvas.delete(self._manual_eye_rect_id)
+            self._manual_eye_rect_id = None
 
     def _draw_detection_rect(self):
-        if getattr(self, "_detection_rect_id", None) is not None:
-            self.canvas.delete(self._detection_rect_id)
-            self._detection_rect_id = None
-        if getattr(self, "_eye_rect_id", None) is not None:
-            self.canvas.delete(self._eye_rect_id)
-            self._eye_rect_id = None
+        # Clear existing AI rects
+        if getattr(self, "_ai_rect_id", None) is not None:
+            self.canvas.delete(self._ai_rect_id)
+            self._ai_rect_id = None
+        if getattr(self, "_ai_eye_rect_id", None) is not None:
+            self.canvas.delete(self._ai_eye_rect_id)
+            self._ai_eye_rect_id = None
+            
+        # Clear existing Manual rects
+        if getattr(self, "_manual_rect_id", None) is not None:
+            self.canvas.delete(self._manual_rect_id)
+            self._manual_rect_id = None
+        if getattr(self, "_manual_eye_rect_id", None) is not None:
+            self.canvas.delete(self._manual_eye_rect_id)
+            self._manual_eye_rect_id = None
 
         if self.current_pil_img is None:
             return
@@ -164,34 +209,32 @@ class ImageCanvasViewer(ctk.CTkFrame):
         center_x = (canvas_w / 2) + self.pan_x
         center_y = (canvas_h / 2) + self.pan_y
 
-        # Draw Level 1 Subject Box (Green)
-        if self._detection_box:
-            nx1, ny1, nx2, ny2 = self._detection_box
+        def _draw_rect(box, outline, width, dash=None):
+            nx1, ny1, nx2, ny2 = box
             x1, y1 = nx1 * img_w, ny1 * img_h
             x2, y2 = nx2 * img_w, ny2 * img_h
             cx1 = center_x - (new_w / 2) + (x1 * ratio)
             cy1 = center_y - (new_h / 2) + (y1 * ratio)
             cx2 = center_x - (new_w / 2) + (x2 * ratio)
             cy2 = center_y - (new_h / 2) + (y2 * ratio)
-            self._detection_rect_id = self.canvas.create_rectangle(
+            return self.canvas.create_rectangle(
                 cx1, cy1, cx2, cy2,
-                outline="#00ff00", width=3
+                outline=outline, width=width, dash=dash
             )
 
-        # Draw Level 2 Head/Eye Box (Gold)
-        eye_b = getattr(self, "_eye_box", None)
-        if eye_b:
-            ex1_n, ey1_n, ex2_n, ey2_n = eye_b
-            ex1, ey1 = ex1_n * img_w, ey1_n * img_h
-            ex2, ey2 = ex2_n * img_w, ey2_n * img_h
-            ecx1 = center_x - (new_w / 2) + (ex1 * ratio)
-            ecy1 = center_y - (new_h / 2) + (ey1 * ratio)
-            ecx2 = center_x - (new_w / 2) + (ex2 * ratio)
-            ecy2 = center_y - (new_h / 2) + (ey2 * ratio)
-            self._eye_rect_id = self.canvas.create_rectangle(
-                ecx1, ecy1, ecx2, ecy2,
-                outline="#ffb703", width=2
-            )
+        # Draw AI Boxes (Solid lines)
+        if getattr(self, "_ai_box", None):
+            self._ai_rect_id = _draw_rect(self._ai_box, "#00ff00", 3)
+            
+        if getattr(self, "_ai_eye_box", None):
+            self._ai_eye_rect_id = _draw_rect(self._ai_eye_box, "#ffb703", 2)
+            
+        # Draw Manual Boxes (Dashed lines)
+        if getattr(self, "_manual_box", None):
+            self._manual_rect_id = _draw_rect(self._manual_box, "#00ff00", 3, (4, 4))
+            
+        if getattr(self, "_manual_eye_box", None):
+            self._manual_eye_rect_id = _draw_rect(self._manual_eye_box, "#ffb703", 2, (4, 4))
 
     def redraw(self, force_resize: bool = False, fast_mode: bool = False):
         if self.current_pil_img is None:
@@ -276,7 +319,8 @@ class ImageCanvasViewer(ctk.CTkFrame):
             corner_radius=8,
             border_width=2,
             border_color="#ffb703",
-            height=44
+            height=44,
+            width=650
         )
         self.crop_toolbar.pack_propagate(False)
 
@@ -352,6 +396,111 @@ class ImageCanvasViewer(ctk.CTkFrame):
             self.crop_rect_id = None
         self.crop_box = None
 
+    def _create_anno_toolbar(self):
+        self.anno_toolbar = ctk.CTkFrame(
+            self, fg_color="#1a1a24", corner_radius=8,
+            border_width=2, border_color="#ffb703", height=44, width=640
+        )
+        self.anno_toolbar.pack_propagate(False)
+
+        lbl_title = ctk.CTkLabel(
+            self.anno_toolbar, text="🎯 CORRECT BOUNDING BOX",
+            font=ctk.CTkFont(size=12, weight="bold"), text_color="#ffb703"
+        )
+        lbl_title.pack(side="left", padx=(12, 10))
+
+        lbl_hint = ctk.CTkLabel(
+            self.anno_toolbar, 
+            text="🟢 Left Drag: Subject  |  🟡 Right Drag: Eye",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#e0e0e0"
+        )
+        lbl_hint.pack(side="left", padx=(5, 15))
+
+        self.btn_confirm_anno = ctk.CTkButton(
+            self.anno_toolbar, text="✔️ Save Annotations",
+            fg_color="#2b9348", hover_color="#1b4332", width=140,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            command=self._on_confirm_anno
+        )
+        self.btn_confirm_anno.pack(side="left", padx=5)
+
+        self.btn_cancel_anno = ctk.CTkButton(
+            self.anno_toolbar, text="❌ Cancel",
+            fg_color="#d90429", hover_color="#8d99ae", width=100,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            command=self.exit_anno_mode
+        )
+        self.btn_cancel_anno.pack(side="left", padx=5)
+        self.anno_toolbar.place_forget()
+
+    def _on_anno_class_changed(self, choice: str):
+        self.anno_class = choice
+
+    def enter_anno_mode(self, current_image_path: str, on_save_callback=None):
+        if self.current_pil_img is None:
+            return
+        
+        self.current_image_path = current_image_path
+        self.is_annotating = True
+        self.on_save_anno_cb = on_save_callback
+        self.anno_subject_box_px = None
+        self.anno_eye_box_px = None
+        self.anno_toolbar.place(relx=0.5, rely=0.05, anchor="n")
+        self.anno_toolbar.lift()
+
+    def exit_anno_mode(self):
+        self.is_annotating = False
+        self.anno_toolbar.place_forget()
+        self._clear_anno_rects()
+
+    def _clear_anno_rects(self):
+        for rid in (self.anno_drag_rect_id, self.anno_subject_rect_id, self.anno_eye_rect_id):
+            if rid is not None:
+                self.canvas.delete(rid)
+        self.anno_drag_rect_id = None
+        self.anno_subject_rect_id = None
+        self.anno_eye_rect_id = None
+
+    def _on_confirm_anno(self):
+        if self.on_save_anno_cb and self.current_image_path and self.current_pil_img:
+            img_w, img_h = self.current_pil_img.size
+            
+            # Convert canvas px back to image coords
+            def to_img_box(px_box):
+                if not px_box: return None
+                x1, y1, x2, y2 = px_box
+                canvas_w = self.canvas.winfo_width()
+                canvas_h = self.canvas.winfo_height()
+                ratio = min(canvas_w / img_w, canvas_h / img_h) * self.zoom_level
+                new_w = max(10, int(img_w * ratio))
+                new_h = max(10, int(img_h * ratio))
+                center_x = (canvas_w / 2) + self.pan_x
+                center_y = (canvas_h / 2) + self.pan_y
+                
+                # Reverse transform
+                img_x1 = (x1 - (center_x - new_w / 2)) / ratio
+                img_y1 = (y1 - (center_y - new_h / 2)) / ratio
+                img_x2 = (x2 - (center_x - new_w / 2)) / ratio
+                img_y2 = (y2 - (center_y - new_h / 2)) / ratio
+                
+                return (int(min(img_x1, img_x2)), int(min(img_y1, img_y2)), 
+                        int(max(img_x1, img_x2)), int(max(img_y1, img_y2)))
+
+            s_box = to_img_box(self.anno_subject_box_px)
+            e_box = to_img_box(self.anno_eye_box_px)
+            
+            if s_box or e_box:
+                self.on_save_anno_cb(
+                    self.current_image_path, 
+                    img_w, 
+                    img_h, 
+                    s_box, 
+                    e_box,
+                    self.current_pil_img
+                )
+            self.exit_anno_mode()
+
     def _on_aspect_changed(self, choice: str):
         if self.crop_box:
             x1, y1, x2, y2 = self.crop_box
@@ -396,9 +545,27 @@ class ImageCanvasViewer(ctk.CTkFrame):
             self.crop_start_y = event.y
             self.crop_box = (event.x, event.y, event.x, event.y)
             self._update_crop_rect_draw()
+        elif self.is_annotating:
+            self._start_anno_drag(event, target_class="Subject")
         else:
             self.drag_start_x = event.x
             self.drag_start_y = event.y
+
+    def _on_right_drag_start(self, event):
+        if self.is_annotating:
+            self._start_anno_drag(event, target_class="Eye")
+
+    def _start_anno_drag(self, event, target_class: str):
+        self.anno_active_class = target_class
+        self.anno_drag_start_x = event.x
+        self.anno_drag_start_y = event.y
+        if self.anno_drag_rect_id is not None:
+            self.canvas.delete(self.anno_drag_rect_id)
+        color = "#00ff00" if self.anno_active_class == "Subject" else "#ffb703"
+        width = 3 if self.anno_active_class == "Subject" else 2
+        self.anno_drag_rect_id = self.canvas.create_rectangle(
+            event.x, event.y, event.x, event.y, outline=color, width=width
+        )
 
     def _on_drag_motion(self, event):
         if self.is_cropping:
@@ -421,6 +588,8 @@ class ImageCanvasViewer(ctk.CTkFrame):
 
             self.crop_box = (x1, y1, x2, y2)
             self._update_crop_rect_draw()
+        elif self.is_annotating:
+            self._motion_anno_drag(event)
         else:
             dx = event.x - self.drag_start_x
             dy = event.y - self.drag_start_y
@@ -440,6 +609,18 @@ class ImageCanvasViewer(ctk.CTkFrame):
             else:
                 self.redraw(force_resize=False)
 
+    def _on_right_drag_motion(self, event):
+        if self.is_annotating:
+            self._motion_anno_drag(event)
+
+    def _motion_anno_drag(self, event):
+        if self.anno_drag_rect_id:
+            self.canvas.coords(
+                self.anno_drag_rect_id,
+                self.anno_drag_start_x, self.anno_drag_start_y,
+                event.x, event.y
+            )
+
     def _on_drag_release(self, event):
         if self.is_cropping and self.crop_box:
             x1, y1, x2, y2 = self.crop_box
@@ -451,6 +632,33 @@ class ImageCanvasViewer(ctk.CTkFrame):
                 my = canvas_h * 0.15
                 self.crop_box = (mx, my, canvas_w - mx, canvas_h - my)
                 self._update_crop_rect_draw()
+        elif self.is_annotating:
+            self._release_anno_drag(event)
+
+    def _on_right_drag_release(self, event):
+        if self.is_annotating:
+            self._release_anno_drag(event)
+
+    def _release_anno_drag(self, event):
+        if self.anno_drag_rect_id:
+            coords = self.canvas.coords(self.anno_drag_rect_id)
+            self.canvas.delete(self.anno_drag_rect_id)
+            self.anno_drag_rect_id = None
+            
+            target_cls = getattr(self, "anno_active_class", "Subject")
+            if coords and abs(coords[2] - coords[0]) > 5 and abs(coords[3] - coords[1]) > 5:
+                if target_cls == "Subject":
+                    self.anno_subject_box_px = tuple(coords)
+                    if self.anno_subject_rect_id: self.canvas.delete(self.anno_subject_rect_id)
+                    self.anno_subject_rect_id = self.canvas.create_rectangle(
+                        *coords, outline="#00ff00", width=3
+                    )
+                else:
+                    self.anno_eye_box_px = tuple(coords)
+                    if self.anno_eye_rect_id: self.canvas.delete(self.anno_eye_rect_id)
+                    self.anno_eye_rect_id = self.canvas.create_rectangle(
+                        *coords, outline="#ffb703", width=2
+                    )
 
     def _on_confirm_crop(self):
         if not self.crop_box or self.current_pil_img is None:

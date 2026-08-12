@@ -16,11 +16,19 @@ except ImportError:
     cv2 = None
     np = None
 
+import warnings
+
 try:
-    import mediapipe as mp
-    _mp_face_mesh = mp.solutions.face_mesh
-    _mp_available = True
-except ImportError:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=FutureWarning)
+        import mediapipe as mp
+    if hasattr(mp, "solutions") and hasattr(mp.solutions, "face_mesh"):
+        _mp_face_mesh = mp.solutions.face_mesh
+        _mp_available = True
+    else:
+        _mp_available = False
+        _mp_face_mesh = None
+except Exception:
     _mp_available = False
     _mp_face_mesh = None
 
@@ -376,7 +384,14 @@ def compute_ai_subject_sharpness(
             from ultralytics import YOLO
             models_dir = Path(__file__).resolve().parent.parent.parent.parent / "lib" / "models"
             models_dir.mkdir(parents=True, exist_ok=True)
-            model_path = models_dir / "yolov8n.pt"
+            custom_model_path = models_dir / "yolo_custom.pt"
+            
+            if custom_model_path.exists():
+                model_path = custom_model_path
+            else:
+                model_path = models_dir / "yolov8n.pt"
+                # Ultralytics will automatically download to base_model_path if it doesn't exist
+                
             yolo_model = YOLO(str(model_path))
 
         # Stage 1: High-confidence YOLO inference (conf=0.15)

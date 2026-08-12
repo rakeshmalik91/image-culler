@@ -1,5 +1,10 @@
 import os
 import sys
+import warnings
+
+# Suppress known upstream third-party FutureWarning (e.g. Keras/TF np.object warning)
+warnings.filterwarnings("ignore", category=FutureWarning, module="keras.*")
+warnings.filterwarnings("ignore", message=".*np\\.object.*", category=FutureWarning)
 
 # Ensure TCL and TK library paths are discovered and exported before any GUI test runs
 def _ensure_tcl_env():

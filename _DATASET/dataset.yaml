@@ -1,0 +1,7 @@
+path: D:/Projects/image-culler/_DATASET
+train: images/train
+val: images/train
+
+names:
+  0: subject
+  1: eye
