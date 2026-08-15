@@ -10,6 +10,7 @@ Morphological Eye Analyzer features:
   - Head geometry & anatomical prior
 """
 
+import sys
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
@@ -29,7 +30,7 @@ def detect_eye_yolo_pose(
     if yolo_pose_model is None:
         try:
             from ultralytics import YOLO
-            root_dir = Path(__file__).resolve().parent.parent.parent.parent
+            root_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent.parent.parent))
             models_dir = root_dir / "lib" / "models"
             pose_path = models_dir / "yolov8n-pose.pt"
             # Ultralytics will automatically download to base_model_path if it doesn't exist
@@ -73,7 +74,7 @@ def detect_eye_yolo_bbox(
     if yolo_eye_model is None:
         try:
             from ultralytics import YOLO
-            root_dir = Path(__file__).resolve().parent.parent.parent.parent
+            root_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent.parent.parent))
             models_dir = root_dir / "lib" / "models"
             eye_path = models_dir / "yolov8n-eye.pt"
             if not eye_path.exists():

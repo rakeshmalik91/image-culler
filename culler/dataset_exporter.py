@@ -4,9 +4,12 @@ import uuid
 from pathlib import Path
 from typing import Optional, Tuple
 
-def create_dataset_structure(dataset_dir: str = "_DATASET"):
+from culler.paths import DATASET_DIR
+
+
+def create_dataset_structure(dataset_dir: Optional[str] = None):
     """Creates the YOLO format dataset directory structure."""
-    base = Path(dataset_dir)
+    base = Path(dataset_dir) if dataset_dir else DATASET_DIR
     images_dir = base / "images" / "train"
     labels_dir = base / "labels" / "train"
     
@@ -57,7 +60,7 @@ def save_annotation(
     img_h: int,
     subject_box: Optional[Tuple[int, int, int, int]],
     eye_box: Optional[Tuple[int, int, int, int]],
-    dataset_dir: str = "_DATASET",
+    dataset_dir: Optional[str] = None,
     pil_image=None
 ) -> bool:
     """

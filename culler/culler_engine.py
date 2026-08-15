@@ -16,6 +16,73 @@ from .db_manager import DatabaseManager
 Union_Path_Str = Union[Path, str]
 
 
+def resolve_input_path(path_input: Union_Path_Str) -> Tuple[Path, Optional[Path]]:
+    """
+    Resolves an input path parameter (which can be a directory or an image file).
+
+    Returns:
+        Tuple[Path, Optional[Path]]: (containing_folder_path, target_image_path)
+        - If input is a directory: (directory_path.resolve(), None)
+        - If input is a file: (file_path.parent.resolve(), file_path.resolve())
+
+    Raises:
+        FileNotFoundError: If the input path does not exist on disk.
+    """
+    p = Path(path_input).resolve()
+    if not p.exists():
+        raise FileNotFoundError(f"Path does not exist: {path_input}")
+
+    if p.is_dir():
+        return p, None
+    else:
+        return p.parent, p
+
+
+def find_item_index_by_path(items: List["ImageItem"], target_path: Union_Path_Str) -> Tuple[int, Optional[Path]]:
+    """
+    Finds the index and exact matched path of an ImageItem matching the target path.
+    Matches by exact path, stacked variant path, case-insensitive path, or filename.
+
+    Returns:
+        Tuple[int, Optional[Path]]: (index, matched_path) if found, or (-1, None) if not found.
+    """
+    if not items or not target_path:
+        return -1, None
+
+    resolved_target = Path(target_path).resolve()
+    target_str_lower = str(resolved_target).lower()
+    target_name_lower = resolved_target.name.lower()
+
+    # Pass 1: Exact path match (direct primary or stacked variant)
+    for idx, item in enumerate(items):
+        if item.path.resolve() == resolved_target:
+            return idx, item.path
+        if item.is_stacked and item.stacked_paths:
+            for sp in item.stacked_paths:
+                if sp.resolve() == resolved_target:
+                    return idx, sp
+
+    # Pass 2: Case-insensitive full path match (Windows safe)
+    for idx, item in enumerate(items):
+        if str(item.path.resolve()).lower() == target_str_lower:
+            return idx, item.path
+        if item.is_stacked and item.stacked_paths:
+            for sp in item.stacked_paths:
+                if str(sp.resolve()).lower() == target_str_lower:
+                    return idx, sp
+
+    # Pass 3: Filename match within same directory (or stem fallback)
+    for idx, item in enumerate(items):
+        if item.path.name.lower() == target_name_lower:
+            return idx, item.path
+        if item.is_stacked and item.stacked_paths:
+            for sp in item.stacked_paths:
+                if sp.name.lower() == target_name_lower:
+                    return idx, sp
+
+    return -1, None
+
+
 class FlagState(Enum):
     UNFLAGGED = "UNFLAGGED"
     PICK = "PICK"
@@ -139,6 +206,12 @@ class CullingSession:
                 break
 
         return (s if s else stem.strip()).lower()
+
+    def find_item(self, target_path: Union_Path_Str) -> Tuple[int, Optional[Path]]:
+        """
+        Finds the index and matched path of the ImageItem in this session matching the target path.
+        """
+        return find_item_index_by_path(self.items, target_path)
 
     def scan_directory(
         self,

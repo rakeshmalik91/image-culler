@@ -12,7 +12,7 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 from rich.prompt import Prompt
 
-from culler import CullingSession, FlagState, ExifToolWrapper
+from culler import CullingSession, FlagState, ExifToolWrapper, resolve_input_path, find_item_index_by_path
 
 console = Console()
 
@@ -26,50 +26,57 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Scan command
     scan_parser = subparsers.add_parser("scan", help="Scan directory and report image metadata & statistics")
-    scan_parser.add_argument("directory", help="Path to directory containing images")
+    scan_parser.add_argument("path", help="Path to directory or image file")
     scan_parser.add_argument("-r", "--recursive", action="store_true", help="Scan directory recursively")
 
     # Cull interactive command
     cull_parser = subparsers.add_parser("cull", help="Interactive terminal image culling session")
-    cull_parser.add_argument("directory", help="Path to directory containing images")
+    cull_parser.add_argument("path", help="Path to directory or image file")
 
     # Move Picked command
     move_p_parser = subparsers.add_parser("move-picked", help="Move all picked (Flag = PICK) images to subfolder")
-    move_p_parser.add_argument("directory", help="Path to directory containing images")
+    move_p_parser.add_argument("path", help="Path to directory or image file")
     move_p_parser.add_argument("--target", default="_SELECTED", help="Subfolder name for picked images")
 
     # Move Rejected command
     move_r_parser = subparsers.add_parser("move-rejected", help="Move all rejected (Flag = REJECT) images to subfolder")
-    move_r_parser.add_argument("directory", help="Path to directory containing images")
+    move_r_parser.add_argument("path", help="Path to directory or image file")
     move_r_parser.add_argument("--target", default="_REJECTED", help="Subfolder name for rejected images")
 
     # Auto Cull Blurry command
     auto_parser = subparsers.add_parser("auto-blur", help="Automatically flag bottom %% blurriest images as REJECT")
-    auto_parser.add_argument("directory", help="Path to directory containing images")
+    auto_parser.add_argument("path", help="Path to directory or image file")
     auto_parser.add_argument("-p", "--percentile", type=float, default=15.0, help="Bottom percentile threshold (default: 15%%)")
 
     # Auto Detect Duplicates command
     auto_dup_parser = subparsers.add_parser("auto-duplicate", help="Detect duplicate photos, keep best, flag rejects")
-    auto_dup_parser.add_argument("directory", help="Path to directory containing images")
+    auto_dup_parser.add_argument("path", help="Path to directory or image file")
     auto_dup_parser.add_argument("-m", "--method", choices=["dhash", "histogram"], default="dhash", help="Duplicate detection method")
     auto_dup_parser.add_argument("-t", "--threshold", type=float, default=6.0, help="Similarity threshold (default: 6.0)")
     auto_dup_parser.add_argument("--keeper", choices=["sharpest", "newest", "largest"], default="sharpest", help="Keeper selection strategy")
 
     # Export command
     export_parser = subparsers.add_parser("export", help="Export culling manifest and metadata to JSON or CSV")
-    export_parser.add_argument("directory", help="Path to directory containing images")
+    export_parser.add_argument("path", help="Path to directory or image file")
     export_parser.add_argument("-o", "--output", default="cull_manifest.json", help="Output file path")
     export_parser.add_argument("--csv", action="store_true", help="Export as CSV instead of JSON")
 
     # Sync EXIF command
     sync_parser = subparsers.add_parser("sync-exif", help="Write star ratings directly back to image EXIF/XMP via ExifTool")
-    sync_parser.add_argument("directory", help="Path to directory containing images")
+    sync_parser.add_argument("path", help="Path to directory or image file")
+
+    # GUI command
+    gui_parser = subparsers.add_parser("gui", help="Launch Graphical User Interface")
+    gui_parser.add_argument("path", nargs="?", default=None, help="Optional path to directory or image file")
 
     return parser
 
 
 def cmd_scan(session: CullingSession, args):
-    console.print(f"[bold cyan]Scanning directory:[/bold cyan] {args.directory}")
+    folder_path, target_image = resolve_input_path(args.path)
+    console.print(f"[bold cyan]Scanning directory:[/bold cyan] {folder_path}")
+    if target_image:
+        console.print(f"[bold magenta]Target image specified:[/bold magenta] {target_image.name}")
     
     with Progress(
         SpinnerColumn(),
@@ -77,7 +84,7 @@ def cmd_scan(session: CullingSession, args):
         transient=True
     ) as progress:
         task = progress.add_task("Reading EXIF metadata...", total=None)
-        items = session.scan_directory(args.directory, recursive=args.recursive)
+        items = session.scan_directory(folder_path, recursive=args.recursive)
 
     if not items:
         console.print("[yellow]No supported images (ARW, JPG, PNG, HEIC) found in directory.[/yellow]")
@@ -113,9 +120,11 @@ def cmd_scan(session: CullingSession, args):
         flag_str = "[green]PICK[/green]" if item.flag == FlagState.PICK else (
             "[red]REJECT[/red]" if item.flag == FlagState.REJECT else "[dim]UNFLAGGED[/dim]"
         )
+        is_target = target_image and (item.path.resolve() == target_image.resolve() or any(sp.resolve() == target_image.resolve() for sp in item.stacked_paths))
+        row_style = "bold yellow" if is_target else None
         table.add_row(
             str(idx),
-            item.filename,
+            item.filename + (" (Target)" if is_target else ""),
             item.format_name,
             item.formatted_size,
             str(item.metadata.get("model", "N/A")),
@@ -123,24 +132,33 @@ def cmd_scan(session: CullingSession, args):
             str(item.metadata.get("iso", "N/A")),
             str(item.metadata.get("shutter_speed", "N/A")),
             str(item.metadata.get("aperture", "N/A")),
-            flag_str
+            flag_str,
+            style=row_style
         )
 
     console.print(table)
 
 
 def cmd_cull(session: CullingSession, args):
-    items = session.scan_directory(args.directory)
+    folder_path, target_image = resolve_input_path(args.path)
+    items = session.scan_directory(folder_path)
     if not items:
         console.print("[yellow]No supported images found.[/yellow]")
         return
+
+    start_idx = 0
+    if target_image:
+        found_idx, _ = session.find_item(target_image)
+        if found_idx >= 0:
+            start_idx = found_idx
+            console.print(f"[green]Starting interactive culling at target image #{start_idx + 1}: {target_image.name}[/green]")
 
     console.print(Panel("[bold green]Interactive Terminal Image Culler[/bold green]\n"
                         "Controls:\n"
                         "  [bold green]p[/bold green] = Pick | [bold red]x[/bold red] = Reject | [bold grey]u[/bold grey] = Unflag\n"
                         "  [bold yellow]1-5[/bold yellow] = Set Stars | [bold blue]n[/bold blue] = Next | [bold blue]b[/bold blue] = Back | [bold magenta]q[/bold magenta] = Quit"))
 
-    idx = 0
+    idx = start_idx
     while idx < len(items):
         item = items[idx]
         console.rule(f"Image {idx + 1} of {len(items)}: {item.filename}")
@@ -190,7 +208,8 @@ def cmd_cull(session: CullingSession, args):
 
 
 def cmd_auto_blur(session: CullingSession, args):
-    session.scan_directory(args.directory)
+    folder_path, _ = resolve_input_path(args.path)
+    session.scan_directory(folder_path)
     console.print(f"[cyan]Calculating sharpness variance across {len(session.items)} images...[/cyan]")
     
     with Progress(
@@ -212,7 +231,8 @@ def cmd_auto_blur(session: CullingSession, args):
 
 
 def cmd_auto_duplicate(session: CullingSession, args):
-    session.scan_directory(args.directory)
+    folder_path, _ = resolve_input_path(args.path)
+    session.scan_directory(folder_path)
     console.print(f"[cyan]Scanning {len(session.items)} images for duplicates ({args.method}, threshold={args.threshold})...[/cyan]")
     
     with Progress(
@@ -242,29 +262,39 @@ def cmd_auto_duplicate(session: CullingSession, args):
 
 
 def cmd_move_picked(session: CullingSession, args):
-    session.scan_directory(args.directory)
+    folder_path, _ = resolve_input_path(args.path)
+    session.scan_directory(folder_path)
     moved = session.move_items_by_flag(FlagState.PICK, args.target)
     console.print(f"[bold green]Moved {len(moved)} Picked images to subfolder '{args.target}'.[/bold green]")
 
 
 def cmd_move_rejected(session: CullingSession, args):
-    session.scan_directory(args.directory)
+    folder_path, _ = resolve_input_path(args.path)
+    session.scan_directory(folder_path)
     moved = session.move_items_by_flag(FlagState.REJECT, args.target)
     console.print(f"[bold red]Moved {len(moved)} Rejected images to subfolder '{args.target}'.[/bold red]")
 
 
 def cmd_export(session: CullingSession, args):
-    session.scan_directory(args.directory)
+    folder_path, _ = resolve_input_path(args.path)
+    session.scan_directory(folder_path)
     fmt = "csv" if args.csv else "json"
     out_file = session.export_manifest(args.output, format_type=fmt)
     console.print(f"[bold green]Exported manifest to {out_file}[/bold green]")
 
 
 def cmd_sync_exif(session: CullingSession, args):
-    session.scan_directory(args.directory)
+    folder_path, _ = resolve_input_path(args.path)
+    session.scan_directory(folder_path)
     console.print("[cyan]Writing star ratings to EXIF via ExifTool...[/cyan]")
     count = session.sync_exif_ratings()
     console.print(f"[bold green]Successfully updated EXIF ratings on {count} images.[/bold green]")
+
+
+def cmd_gui(args):
+    from gui import ImageCullerApp
+    app = ImageCullerApp(initial_path=args.path)
+    app.mainloop()
 
 
 def main():
@@ -274,6 +304,10 @@ def main():
     if not args.command:
         parser.print_help()
         sys.exit(1)
+
+    if args.command == "gui":
+        cmd_gui(args)
+        return
 
     exif = ExifToolWrapper()
     if not exif.is_available():
@@ -301,3 +335,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

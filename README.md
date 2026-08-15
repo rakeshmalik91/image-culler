@@ -46,7 +46,19 @@ A high-performance Python photo culling application designed for professional ph
 
 ```bash
 pip install -r requirements.txt
+
+# Launch GUI (blank or restores open tabs)
 python gui.py
+
+# Launch GUI and open a specific folder
+python gui.py "D:\Photos\2024"
+
+# Launch GUI, open containing folder, and automatically select the specified image
+python gui.py "D:\Photos\2024\DSC01234.ARW"
+
+# CLI Commands (accept directory or specific image file)
+python culler.py scan "D:\Photos\2024"
+python culler.py cull "D:\Photos\2024\DSC01234.JPG"
 ```
 
 ---

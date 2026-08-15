@@ -3,6 +3,8 @@ import sqlite3
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, List
 
+from culler.paths import DB_PATH
+
 
 class DatabaseManager:
     """
@@ -14,8 +16,7 @@ class DatabaseManager:
         if db_path:
             self.db_path = Path(db_path).resolve()
         else:
-            base_dir = Path(__file__).resolve().parent.parent
-            self.db_path = base_dir / "culler.db"
+            self.db_path = DB_PATH
 
         self._init_db()
 

@@ -4,6 +4,7 @@ rawpy>=0.18.0
 opencv-python>=4.8.0
 rich>=13.0.0
 customtkinter>=5.2.0
+tkinterdnd2>=0.9.0
 numpy>=1.24.0
 ultralytics>=8.0.0
 mediapipe>=0.10.0

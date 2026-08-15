@@ -5,6 +5,7 @@ sharpness using 95th percentile Laplacian + Sobel gradient energy on multi-layer
 Falls back to center-60% ROI crop when no YOLO detection is available.
 """
 
+import sys
 from pathlib import Path
 from typing import Any, Optional, Tuple
 from PIL import Image
@@ -15,22 +16,6 @@ try:
 except ImportError:
     cv2 = None
     np = None
-
-import warnings
-
-try:
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=FutureWarning)
-        import mediapipe as mp
-    if hasattr(mp, "solutions") and hasattr(mp.solutions, "face_mesh"):
-        _mp_face_mesh = mp.solutions.face_mesh
-        _mp_available = True
-    else:
-        _mp_available = False
-        _mp_face_mesh = None
-except Exception:
-    _mp_available = False
-    _mp_face_mesh = None
 
 from .bird_subject import compute_bird_subject_sharpness
 
@@ -382,7 +367,8 @@ def compute_ai_subject_sharpness(
 
         if yolo_model is None:
             from ultralytics import YOLO
-            models_dir = Path(__file__).resolve().parent.parent.parent.parent / "lib" / "models"
+            base_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent.parent.parent))
+            models_dir = base_dir / "lib" / "models"
             models_dir.mkdir(parents=True, exist_ok=True)
             custom_model_path = models_dir / "yolo_custom.pt"
             

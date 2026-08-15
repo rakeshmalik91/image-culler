@@ -3,14 +3,18 @@ import shutil
 from pathlib import Path
 import threading
 import sys
+from typing import Optional
 
 try:
     from ultralytics import YOLO
 except ImportError:
     YOLO = None
 
+from culler.paths import DATASET_DIR
+
+
 def train_custom_yolo(
-    dataset_dir: str = "_DATASET", 
+    dataset_dir: Optional[str] = None, 
     epochs: int = 25, 
     on_progress=None, 
     on_complete=None, 
@@ -26,7 +30,8 @@ def train_custom_yolo(
             on_error(Exception("ultralytics package is not installed. Please install it to use Custom Training."))
         return False
         
-    dataset_yaml = Path(dataset_dir) / "dataset.yaml"
+    ds_dir = Path(dataset_dir) if dataset_dir else DATASET_DIR
+    dataset_yaml = ds_dir / "dataset.yaml"
     if not dataset_yaml.exists():
         if on_error:
             on_error(Exception(f"Dataset YAML not found at {dataset_yaml}. You need to annotate at least one image first."))
@@ -37,7 +42,8 @@ def train_custom_yolo(
             if on_progress:
                 on_progress("Initializing YOLOv8 Nano model...")
                 
-            models_dir = Path(__file__).resolve().parent.parent / "lib" / "models"
+            base_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+            models_dir = base_dir / "lib" / "models"
             models_dir.mkdir(parents=True, exist_ok=True)
             base_model_path = models_dir / "yolov8n.pt"
             
@@ -83,7 +89,8 @@ def train_custom_yolo(
             best_weights = runs_dir / "culler_custom" / "weights" / "best.pt"
             
             # Copy to lib/models/yolo_custom.pt
-            target_dir = Path("lib") / "models"
+            base_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+            target_dir = base_dir / "lib" / "models"
             target_dir.mkdir(parents=True, exist_ok=True)
             target_weights = target_dir / "yolo_custom.pt"
             

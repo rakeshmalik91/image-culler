@@ -21,3 +21,6 @@ _DATASET/
 
 lib/models/yolo_custom.pt
 yolo*.pt
+
+build/
+dist/

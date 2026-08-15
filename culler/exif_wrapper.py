@@ -9,6 +9,16 @@ from typing import List, Dict, Any, Optional, Tuple
 from PIL import Image
 
 
+def _run_cli(cmd, **kwargs):
+    if sys.platform == "win32":
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0  # SW_HIDE
+        kwargs["startupinfo"] = startupinfo
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    return subprocess.run(cmd, **kwargs)
+
+
 class ExifToolWrapper:
     """
     Wrapper for ExifTool binary executable.
@@ -24,8 +34,8 @@ class ExifToolWrapper:
         self._orientation_cache: Dict[Tuple[str, float], int] = {}
 
     def _find_default_exiftool(self) -> str:
-        # Check workspace lib/exif-tools directory
-        base_dir = Path(__file__).resolve().parent.parent
+        # Check PyInstaller bundle or workspace lib/exif-tools directory
+        base_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
         bundled_exe = base_dir / "lib" / "exif-tools" / "exiftool.exe"
         if bundled_exe.exists():
             return str(bundled_exe)
@@ -35,7 +45,7 @@ class ExifToolWrapper:
 
     def is_available(self) -> bool:
         try:
-            res = subprocess.run([self.exiftool_path, "-ver"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            res = _run_cli([self.exiftool_path, "-ver"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             return res.returncode == 0
         except Exception:
             return False
@@ -132,7 +142,7 @@ class ExifToolWrapper:
                     "-EXIF:Orientation",
                     str(image_path)
                 ]
-                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                res = _run_cli(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 if res.returncode == 0 and res.stdout:
                     raw_list = json.loads(res.stdout)
                     if raw_list:
@@ -194,7 +204,7 @@ class ExifToolWrapper:
         for tag in tag_options:
             try:
                 cmd = [self.exiftool_path, "-b", tag, str(arw_path)]
-                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                res = _run_cli(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 if res.returncode == 0 and len(res.stdout) > 50000:
                     try:
                         im = Image.open(io.BytesIO(res.stdout))
@@ -251,7 +261,7 @@ class ExifToolWrapper:
                 "-CreateDate"
             ] + [str(p) for p in image_paths]
 
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            res = _run_cli(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             if res.returncode != 0 or not res.stdout:
                 return [self._get_pil_fallback_metadata(p) for p in image_paths]
 
@@ -452,7 +462,7 @@ class ExifToolWrapper:
                 f"-IFD0:Rating={rating}",
                 str(image_path)
             ]
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            res = _run_cli(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             return res.returncode == 0
         except Exception as e:
             print(f"Error writing rating to {image_path}: {e}")

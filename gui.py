@@ -10,17 +10,27 @@ import threading
 import tkinter as tk
 from tkinter import filedialog as fd, messagebox as mb, simpledialog
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Set
+from typing import Optional, List, Dict, Any, Set, Union
 from dataclasses import dataclass, field
 
 import customtkinter as ctk
 from PIL import Image
 
-from culler.culler_engine import CullingSession, ImageItem, FlagState
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+    _HAS_DND = True
+except Exception:
+    DND_FILES = None
+    TkinterDnD = None
+    _HAS_DND = False
+
+from culler.culler_engine import CullingSession, ImageItem, FlagState, resolve_input_path, find_item_index_by_path
 from culler.db_manager import DatabaseManager
 from culler.dataset_exporter import save_annotation
+from culler.image_loader import ImageLoader
 from culler.ml_trainer import train_custom_yolo
-from culler.gui import HeaderToolbar, ThumbnailList, ImageCanvasViewer, MetadataPanel, MetadataCleanupDialog, SettingsDialog, BlurScanDialog, DuplicateScanDialog, ProgressDialog, TabBar
+from culler.paths import DATASET_DIR
+from culler.gui import HeaderToolbar, ThumbnailList, ImageCanvasViewer, MetadataPanel, MetadataCleanupDialog, SettingsDialog, BlurScanDialog, DuplicateScanDialog, ProgressDialog, TabBar, SplashScreen
 from culler.logger import log_info, log_debug, log_error
 
 # Set modern dark UI theme
@@ -36,7 +46,7 @@ class ImageCullerApp(ctk.CTk):
     and SQLite metadata folder hierarchy cleanup.
     """
 
-    def __init__(self):
+    def __init__(self, initial_path: Optional[str] = None, show_splash: bool = True, splash_screen: Optional[Any] = None):
         super().__init__()
 
         self.title("Fast Photo Culler - Professional RAW+JPG Photo Selection")
@@ -63,20 +73,50 @@ class ImageCullerApp(ctk.CTk):
         self.selected_indices: Set[int] = set()
         self.selection_anchor_idx: int = 0
 
+        # Start with main window hidden while splash screen is active
+        self.withdraw()
+
+        splash = splash_screen
+        if splash is None and show_splash:
+            try:
+                splash = SplashScreen(master=self)
+                if initial_path:
+                    folder_label = os.path.basename(initial_path.rstrip("/\\")) or initial_path
+                    splash.set_status(f"Loading {folder_label}...")
+                else:
+                    splash.set_status("Initializing workspace...")
+                splash.update_idletasks()
+                splash.update()
+            except Exception:
+                splash = None
+
+        if splash:
+            splash.set_status("Creating components...")
+
         self._create_components()
         self._bind_events()
 
-        # Restore open tabs from DB (lazy loads all except active)
-        self._restore_tabs_state()
+        if splash:
+            splash.set_status("Restoring workspace...")
 
-        # Force a full render pass so the active tab color is painted
-        # before mainloop() starts. Without this, CustomTkinter may show
-        # unrendered grey boxes until the first after() callback fires.
+        # Restore open tabs from DB (lazy load active if no initial_path)
+        self._restore_tabs_state(auto_load_active=(initial_path is None))
+
+        # Close splash and reveal main window
+        if splash:
+            splash.close()
+
+        self.deiconify()
+        self.lift()
+        self.focus_force()
         self.update_idletasks()
         try:
             self.update()
         except Exception:
             pass
+
+        if initial_path:
+            self.after(10, lambda p=initial_path: self.open_path(p))
 
     def _get_active_tab(self) -> Optional[Dict[str, Any]]:
         if 0 <= self.active_tab_index < len(self.tabs):
@@ -97,7 +137,7 @@ class ImageCullerApp(ctk.CTk):
         tab["current_items"] = list(self.current_items)
         tab["current_index"] = self.current_index
 
-    def _create_tab_info(self, directory: str) -> Dict[str, Any]:
+    def _create_tab_info(self, directory: str, target_image: Optional[Path] = None) -> Dict[str, Any]:
         folder_name = os.path.basename(directory) or directory
         return {
             "directory": str(Path(directory).resolve()),
@@ -117,9 +157,10 @@ class ImageCullerApp(ctk.CTk):
             "loading": False,
             "load_total": 0,
             "load_current": 0,
+            "pending_target_image": target_image,
         }
 
-    def _restore_tabs_state(self):
+    def _restore_tabs_state(self, auto_load_active: bool = True):
         saved = self.db.get_open_tabs()
         if not saved or not isinstance(saved, dict):
             saved = {"tabs": [], "active_index": 0}
@@ -163,9 +204,10 @@ class ImageCullerApp(ctk.CTk):
         except Exception:
             pass
 
-        # Lazy load: only load active tab on startup, others load on demand
-        tab = self.tabs[active_idx]
-        self._load_tab_directory(tab, show_progress=True)
+        if auto_load_active:
+            # Lazy load: only load active tab on startup, others load on demand
+            tab = self.tabs[active_idx]
+            self._load_tab_directory(tab, show_progress=True)
 
         # Re-assert active tab color after loading indicator may have updated label
         def _restore_active_color():
@@ -175,14 +217,145 @@ class ImageCullerApp(ctk.CTk):
         self.after(1, _restore_active_color)
         self.after(100, _restore_active_color)
 
-    def _add_tab(self, directory: str):
-        tab_info = self._create_tab_info(directory)
+    def _add_tab(self, directory: str, target_image: Optional[Path] = None):
+        tab_info = self._create_tab_info(directory, target_image=target_image)
         self.tabs.append(tab_info)
         idx = self.tab_bar.add_tab(tab_info["tab_label"])
         self.tab_bar.set_active(len(self.tabs) - 1)
         self.active_tab_index = len(self.tabs) - 1
         self._load_tab_directory(tab_info, show_progress=True)
         self._persist_tabs_state()
+
+    def open_path(self, path_input: Union[str, Path]):
+        """
+        Opens a folder or image file path in the app.
+        If a folder is passed: opens the folder in a tab (or switches to it if already open).
+        If an image file is passed: opens the containing folder and automatically selects that image.
+        """
+        try:
+            folder_path, target_image = resolve_input_path(path_input)
+        except Exception as e:
+            log_error(f"Failed to open path '{path_input}': {e}")
+            self._update_status(f"Error: Path does not exist - {path_input}")
+            return
+
+        matching_tab_idx = None
+        folder_resolved = folder_path.resolve()
+        for idx, tab in enumerate(self.tabs):
+            tab_dir = Path(tab.get("directory", "")).resolve()
+            if tab_dir == folder_resolved:
+                matching_tab_idx = idx
+                break
+
+        if matching_tab_idx is not None:
+            tab = self.tabs[matching_tab_idx]
+            if target_image:
+                tab["pending_target_image"] = target_image
+
+            if matching_tab_idx != self.active_tab_index:
+                self._switch_tab(matching_tab_idx)
+            else:
+                # Active tab is already this one
+                if target_image and tab.get("is_loaded"):
+                    tab["pending_target_image"] = None
+                    found_idx, matched_sub = find_item_index_by_path(self.current_items, target_image)
+                    if found_idx < 0 and tab.get("session") and tab["session"].items:
+                        # Reset filter to All if filtered out
+                        self.toolbar.apply_filter_values({"flag": "All", "rating": [], "format": "All Formats", "tag": []})
+                        self._on_filter_changed()
+                        found_idx, matched_sub = find_item_index_by_path(self.current_items, target_image)
+
+                    if found_idx >= 0:
+                        self._select_image(found_idx, target_path=matched_sub, from_click=False)
+                        self.thumb_list.set_selected_indices(self.selected_indices, found_idx, active_path=matched_sub, auto_scroll=True)
+                elif not tab.get("is_loaded") and not tab.get("loading"):
+                    self._load_tab_directory(tab, show_progress=True)
+        else:
+            self._add_tab(str(folder_path), target_image=target_image)
+
+    def _setup_drag_drop(self):
+        """Enable folder / image drag-and-drop anywhere on the GUI to open tabs."""
+        if not _HAS_DND:
+            return
+        try:
+            TkinterDnD.require(self)
+        except Exception as e:
+            log_error(f"tkdnd not available; drag-and-drop disabled: {e}")
+            return
+        # NOTE: the CTk root window (a tkinter.Tk) is not a BaseWidget subclass,
+        # so drop_target_register/dnd_bind are unavailable on it. The top-level
+        # containers below inherit from BaseWidget and together tile the entire
+        # window, so drops anywhere on the GUI are captured (tkdnd routes a drop
+        # on any descendant to the nearest registered ancestor container).
+        drop_targets = [self.tab_bar, self.toolbar, self.main_container, self.status_bar]
+        for target in drop_targets:
+            try:
+                target.drop_target_register(DND_FILES)
+                target.dnd_bind("<<Drop>>", self._on_drag_drop)
+            except Exception as e:
+                log_error(f"Failed to register drag-and-drop on {target}: {e}")
+        log_debug("Drag-and-drop enabled for folders and image files.")
+
+    def _parse_drop_data(self, data: str) -> List[Path]:
+        """Parse tkdnd <<Drop>> data into a de-duplicated list of existing Path objects."""
+        if not data:
+            return []
+        try:
+            raw_paths = self.tk.splitlist(data)
+        except Exception:
+            raw_paths = (data,)
+        paths: List[Path] = []
+        seen: Set[str] = set()
+        for rp in raw_paths:
+            rp = rp.strip()
+            if not rp:
+                continue
+            try:
+                p = Path(rp).expanduser()
+            except Exception:
+                continue
+            if not p.exists():
+                continue
+            key = str(p.resolve())
+            if key in seen:
+                continue
+            seen.add(key)
+            paths.append(p)
+        return paths
+
+    def _on_drag_drop(self, event):
+        """Handle a drag-and-drop <<Drop>> of folders and/or image files."""
+        try:
+            paths = self._parse_drop_data(event.data)
+        except Exception as e:
+            log_error(f"Failed to parse dropped paths: {e}")
+            return
+        if not paths:
+            return
+        handled = 0
+        for p in paths:
+            if self._handle_dropped_path(p):
+                handled += 1
+        if handled:
+            self._update_status(f"Opened {handled} item(s) via drag-and-drop.")
+        else:
+            self._update_status("Drag-and-drop ignored: no supported folders/images found.")
+
+    def _handle_dropped_path(self, path: Path) -> bool:
+        """Open a dropped folder as a tab, or open a dropped image's parent folder.
+
+        Returns True if the path was handled (folder or supported image file).
+        """
+        try:
+            if path.is_dir():
+                self.open_path(path)
+                return True
+            if path.is_file() and ImageLoader.is_supported(path):
+                self.open_path(path)
+                return True
+        except Exception as e:
+            log_error(f"Failed to handle dropped path '{path}': {e}")
+        return False
 
     def _close_tab(self, index: int):
         if len(self.tabs) <= 1:
@@ -306,8 +479,15 @@ class ImageCullerApp(ctk.CTk):
             pi.stacked_paths = list(item.stacked_paths)
             placeholder_items.append(pi)
 
+        sel_idx = 0
+        pending_target = tab.get("pending_target_image")
+        if pending_target:
+            f_idx, _ = find_item_index_by_path(placeholder_items, pending_target)
+            if f_idx >= 0:
+                sel_idx = f_idx
+
         self.thumb_list.set_image_loader(session.image_loader)
-        self.thumb_list.update_items(placeholder_items, selected_idx=0, white_balance=white_balance)
+        self.thumb_list.update_items(placeholder_items, selected_idx=sel_idx, white_balance=white_balance)
 
     def _on_tab_scan_complete(self, tab: Dict[str, Any]):
         self._update_tab_loading_indicator(tab)
@@ -408,7 +588,11 @@ class ImageCullerApp(ctk.CTk):
             format_filter=fmt_val,
             tag_filter=tag_filter
         )
-        tab["current_index"] = 0 if tab["current_items"] else -1
+        if tab.get("pending_target_image") and tab["current_items"]:
+            f_idx, _ = find_item_index_by_path(tab["current_items"], tab["pending_target_image"])
+            tab["current_index"] = f_idx if f_idx >= 0 else 0
+        else:
+            tab["current_index"] = 0 if tab["current_items"] else -1
 
     def _persist_tabs_state(self):
         self._save_active_tab_state()
@@ -547,6 +731,8 @@ class ImageCullerApp(ctk.CTk):
         self.prefetch_bar.pack(side="left")
         self.prefetch_bar.set(1.0)
 
+        self._setup_drag_drop()
+
     def _bind_events(self):
         # Navigation & Multi-Selection Bindings
         # Single Step (+/- 1)
@@ -668,7 +854,7 @@ class ImageCullerApp(ctk.CTk):
         else:
             mb.showinfo("Refresh Directory", "No active photo folder opened.")
 
-    def _load_directory(self, folder_path: str):
+    def _load_directory(self, folder_path: str, target_image: Optional[Path] = None):
         tab = self._get_active_tab()
         if not tab:
             mb.showinfo("No Tab", "Open a directory in a tab first.")
@@ -690,6 +876,7 @@ class ImageCullerApp(ctk.CTk):
         tab["loading"] = True
         tab["load_total"] = 0
         tab["load_current"] = 0
+        tab["pending_target_image"] = target_image
 
         self.tab_bar.set_label(self.active_tab_index, tab["tab_label"] + " ⟳")
         self._update_status(f"Scanning directory: {folder_path}...")
@@ -788,7 +975,15 @@ class ImageCullerApp(ctk.CTk):
         tab["current_items"] = self.current_items
 
         target_idx = 0
-        if prev_selected_path and self.current_items:
+        target_sub_path = None
+        pending_target = tab.get("pending_target_image")
+        if pending_target:
+            tab["pending_target_image"] = None
+            found_idx, matched_sub = find_item_index_by_path(self.current_items, pending_target)
+            if found_idx >= 0:
+                target_idx = found_idx
+                target_sub_path = matched_sub
+        elif prev_selected_path and self.current_items:
             for idx, item in enumerate(self.current_items):
                 if item.path == prev_selected_path or prev_selected_path in item.stacked_paths:
                     target_idx = idx
@@ -805,7 +1000,7 @@ class ImageCullerApp(ctk.CTk):
         )
 
         if self.current_items:
-            self._select_image(target_idx, from_click=False)
+            self._select_image(target_idx, target_path=target_sub_path, from_click=False)
         else:
             self.selected_indices = set()
             self.viewer.clear()
@@ -1286,14 +1481,14 @@ class ImageCullerApp(ctk.CTk):
             if not session:
                 return
 
-            dataset_yaml = Path("_DATASET/dataset.yaml")
-            needs_training = Path("_DATASET/.needs_training")
-            custom_model = Path("lib/models/yolo_custom.pt")
+            dataset_yaml = DATASET_DIR / "dataset.yaml"
+            needs_training = DATASET_DIR / ".needs_training"
+            custom_model = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / "lib" / "models" / "yolo_custom.pt"
             
             should_train = dataset_yaml.exists() and needs_training.exists()
             if should_train:
                 self.after(0, lambda: prog_dialog.set_count_label("Epoch"))
-                train_dir = Path("_DATASET/images/train")
+                train_dir = DATASET_DIR / "images" / "train"
                 photo_count = sum(1 for f in train_dir.iterdir() if f.is_file()) if train_dir.exists() else 0
                 self.after(0, lambda: prog_dialog.set_training_photo_count(photo_count))
                 self.after(0, lambda: prog_dialog.update_progress(0, 100, "Fine-tuning Custom YOLO Model (This may take a few minutes)..."))
@@ -1307,7 +1502,7 @@ class ImageCullerApp(ctk.CTk):
                     log_info(f"Training Progress: {args}")
                 
                 success = train_custom_yolo(
-                    dataset_dir="_DATASET",
+                    dataset_dir=str(DATASET_DIR),
                     epochs=25,
                     on_progress=on_prog,
                     sync=True
@@ -1553,8 +1748,8 @@ class ImageCullerApp(ctk.CTk):
     def _on_save_annotate(self, image_path: str, img_w: int, img_h: int, s_box: tuple, e_box: tuple, pil_image=None):
         success = save_annotation(image_path, img_w, img_h, s_box, e_box, pil_image=pil_image)
         if success:
-            Path("_DATASET/.needs_training").touch()
-            self._update_status(f"✅ Saved YOLO annotations for {Path(image_path).name} to _DATASET")
+            (DATASET_DIR / ".needs_training").touch()
+            self._update_status(f"✅ Saved YOLO annotations for {Path(image_path).name} to {DATASET_DIR}")
             
             # Save the manual boxes back to the DB and display them in the viewer
             if self.current_items and 0 <= self.current_index < len(self.current_items):
@@ -2368,5 +2563,6 @@ def open_folder_in_explorer(folder_path: Path):
 
 
 if __name__ == "__main__":
-    app = ImageCullerApp()
+    initial_path = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("-") else None
+    app = ImageCullerApp(initial_path=initial_path)
     app.mainloop()
