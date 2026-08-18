@@ -12,6 +12,7 @@ from PIL import Image
 from .exif_wrapper import ExifToolWrapper
 from .image_loader import ImageLoader
 from .db_manager import DatabaseManager
+from .dataset_exporter import load_manual_annotations
 
 Union_Path_Str = Union[Path, str]
 
@@ -301,6 +302,7 @@ class CullingSession:
 
         # Fetch saved DB records for this directory
         db_records = self.db.get_all_records_for_dir(str(dir_path))
+        manual_annos = load_manual_annotations(dataset_dir=str(self.db.dataset_dir) if self.db else None)
 
         # Batch fetch metadata via ExifTool
         str_paths = [str(item.path) for item in self.items]
@@ -332,10 +334,17 @@ class CullingSession:
                     item.detection_box = rec["detection_box"]
                 if rec.get("eye_box"):
                     item.eye_box = rec["eye_box"]
-                if rec.get("manual_detection_box"):
-                    item.manual_detection_box = rec["manual_detection_box"]
-                if rec.get("manual_eye_box"):
-                    item.manual_eye_box = rec["manual_eye_box"]
+
+            # Overlay manual bounding box annotations from _DATASET/annotations.json
+            resolved_key = str(item.path.resolve())
+            if resolved_key in manual_annos:
+                m_anno = manual_annos[resolved_key]
+                item.manual_detection_box = m_anno.get("manual_detection_box")
+                item.manual_eye_box = m_anno.get("manual_eye_box")
+            elif item_path_str in manual_annos:
+                m_anno = manual_annos[item_path_str]
+                item.manual_detection_box = m_anno.get("manual_detection_box")
+                item.manual_eye_box = m_anno.get("manual_eye_box")
 
             if progress_callback:
                 try:
@@ -359,9 +368,7 @@ class CullingSession:
                     sharpness=item.sharpness_score,
                     tags=item.tags_str,
                     detection_box=item.detection_box,
-                    eye_box=item.eye_box,
-                    manual_detection_box=item.manual_detection_box,
-                    manual_eye_box=item.manual_eye_box
+                    eye_box=item.eye_box
                 )
 
     def unflag_all_items(self) -> int:

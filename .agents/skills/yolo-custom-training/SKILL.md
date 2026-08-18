@@ -59,7 +59,7 @@ _DATASET/
    - Image format conversion (RGBA/P -> RGB JPEG)
    - Label normalization via `normalize_box()` (pixel coords -> 0-1 normalized)
 3. On success, `Path("_DATASET/.needs_training").touch()` is created to signal that the model needs retraining.
-4. Box coordinates are also persisted to SQLite (`image_records.detection_box`, `image_records.eye_box`) for immediate UI display.
+4. Box coordinates are persisted as structured text under `_DATASET/annotations.json` for persistent and immediate UI display across sessions.
 
 ---
 

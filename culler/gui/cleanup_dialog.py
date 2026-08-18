@@ -59,7 +59,7 @@ class MetadataCleanupDialog(ctk.CTkToplevel):
 
         lbl_sub = ctk.CTkLabel(
             header_box,
-            text="Hierarchical view of all folder trees with saved flags, ratings, & tags in culler.db",
+            text="Hierarchical view of all folder trees with saved flags, ratings, & tags in workspace database",
             font=ctk.CTkFont(size=11),
             text_color="#d0d0d0"
         )
@@ -234,7 +234,7 @@ class MetadataCleanupDialog(ctk.CTkToplevel):
         ans = mb.askyesno(
             "Confirm Metadata Cleanup",
             f"Are you sure you want to clean up stored metadata for {len(selected)} selected folder(s)?\n\n"
-            f"This will delete {total_to_delete} stored culling records from culler.db."
+            f"This will delete {total_to_delete} stored culling records from workspace database."
         )
         if ans:
             deleted_count = self.db.cleanup_multiple_folders(selected)
@@ -249,7 +249,7 @@ class MetadataCleanupDialog(ctk.CTkToplevel):
     def _clean_entire_db(self):
         ans = mb.askyesno(
             "PURGE ENTIRE DATABASE",
-            "WARNING: This will permanently delete ALL stored culling records, ratings, and tags from culler.db!\n\n"
+            "WARNING: This will permanently delete ALL stored culling records, ratings, and tags from workspace database!\n\n"
             "Are you sure you want to purge the entire database?",
             icon="warning"
         )

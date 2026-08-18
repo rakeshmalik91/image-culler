@@ -12,7 +12,7 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 from rich.prompt import Prompt
 
-from culler import CullingSession, FlagState, ExifToolWrapper, resolve_input_path, find_item_index_by_path
+from culler import CullingSession, FlagState, ExifToolWrapper, DatabaseManager, resolve_input_path, find_item_index_by_path
 
 console = Console()
 
@@ -22,6 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Fast Image Culling Tool (Sony ARW, JPG, PNG, HEIC)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
+    parser.add_argument("-w", "--workspace", default=None, help="Path to custom .fpc-workspace database file")
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
 
     # Scan command
@@ -293,7 +294,7 @@ def cmd_sync_exif(session: CullingSession, args):
 
 def cmd_gui(args):
     from gui import ImageCullerApp
-    app = ImageCullerApp(initial_path=args.path)
+    app = ImageCullerApp(initial_path=args.path, workspace_path=getattr(args, "workspace", None))
     app.mainloop()
 
 
@@ -313,7 +314,8 @@ def main():
     if not exif.is_available():
         console.print("[bold red]Warning: ExifTool binary not found at default location. Sony ARW previews may use fallback rawpy.[/bold red]")
 
-    session = CullingSession(exif_wrapper=exif)
+    db = DatabaseManager(args.workspace) if getattr(args, "workspace", None) else None
+    session = CullingSession(exif_wrapper=exif, db_manager=db)
 
     if args.command == "scan":
         cmd_scan(session, args)

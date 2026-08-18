@@ -26,7 +26,7 @@ except Exception:
 
 from culler.culler_engine import CullingSession, ImageItem, FlagState, resolve_input_path, find_item_index_by_path
 from culler.db_manager import DatabaseManager
-from culler.dataset_exporter import save_annotation
+from culler.dataset_exporter import save_annotation, save_manual_annotation
 from culler.image_loader import ImageLoader
 from culler.ml_trainer import train_custom_yolo
 from culler.paths import DATASET_DIR
@@ -46,12 +46,36 @@ class ImageCullerApp(ctk.CTk):
     and SQLite metadata folder hierarchy cleanup.
     """
 
-    def __init__(self, initial_path: Optional[str] = None, show_splash: bool = True, splash_screen: Optional[Any] = None):
+    @property
+    def dataset_dir(self) -> Path:
+        """Returns the _DATASET directory associated with the active workspace."""
+        if self.db:
+            return self.db.dataset_dir
+        return DATASET_DIR
+
+    def _update_window_title(self):
+        ws_name = self.db.db_path.name if self.db and hasattr(self.db, "db_path") else "default.fpc-workspace"
+        self.title(f"Fast Photo Culler - [{ws_name}]")
+
+    def __init__(
+        self,
+        initial_path: Optional[str] = None,
+        show_splash: bool = True,
+        splash_screen: Optional[Any] = None,
+        workspace_path: Optional[str] = None
+    ):
         super().__init__()
 
-        self.title("Fast Photo Culler - Professional RAW+JPG Photo Selection")
-        
-        self.db = DatabaseManager()
+        target_ws = workspace_path
+        folder_or_img = initial_path
+        if initial_path and (str(initial_path).endswith(".fpc-workspace") or str(initial_path).endswith(".db")):
+            target_ws = initial_path
+            folder_or_img = None
+
+        if not getattr(self, "db", None) or target_ws is not None:
+            self.db = DatabaseManager(target_ws)
+
+        self._update_window_title()
 
         self.tabs: List[Dict[str, Any]] = []
         self.active_tab_index: int = -1
@@ -99,8 +123,8 @@ class ImageCullerApp(ctk.CTk):
         if splash:
             splash.set_status("Restoring workspace...")
 
-        # Restore open tabs from DB (lazy load active if no initial_path)
-        self._restore_tabs_state(auto_load_active=(initial_path is None))
+        # Restore open tabs from DB (lazy load active if no folder_or_img)
+        self._restore_tabs_state(auto_load_active=(folder_or_img is None))
 
         # Close splash and reveal main window
         if splash:
@@ -115,8 +139,8 @@ class ImageCullerApp(ctk.CTk):
         except Exception:
             pass
 
-        if initial_path:
-            self.after(10, lambda p=initial_path: self.open_path(p))
+        if folder_or_img:
+            self.after(10, lambda p=folder_or_img: self.open_path(p))
 
     def _get_active_tab(self) -> Optional[Dict[str, Any]]:
         if 0 <= self.active_tab_index < len(self.tabs):
@@ -1481,14 +1505,15 @@ class ImageCullerApp(ctk.CTk):
             if not session:
                 return
 
-            dataset_yaml = DATASET_DIR / "dataset.yaml"
-            needs_training = DATASET_DIR / ".needs_training"
+            dataset_dir = self.dataset_dir
+            dataset_yaml = dataset_dir / "dataset.yaml"
+            needs_training = dataset_dir / ".needs_training"
             custom_model = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / "lib" / "models" / "yolo_custom.pt"
             
             should_train = dataset_yaml.exists() and needs_training.exists()
             if should_train:
                 self.after(0, lambda: prog_dialog.set_count_label("Epoch"))
-                train_dir = DATASET_DIR / "images" / "train"
+                train_dir = dataset_dir / "images" / "train"
                 photo_count = sum(1 for f in train_dir.iterdir() if f.is_file()) if train_dir.exists() else 0
                 self.after(0, lambda: prog_dialog.set_training_photo_count(photo_count))
                 self.after(0, lambda: prog_dialog.update_progress(0, 100, "Fine-tuning Custom YOLO Model (This may take a few minutes)..."))
@@ -1502,7 +1527,7 @@ class ImageCullerApp(ctk.CTk):
                     log_info(f"Training Progress: {args}")
                 
                 success = train_custom_yolo(
-                    dataset_dir=str(DATASET_DIR),
+                    dataset_dir=str(dataset_dir),
                     epochs=25,
                     on_progress=on_prog,
                     sync=True
@@ -1746,10 +1771,11 @@ class ImageCullerApp(ctk.CTk):
             self._update_status("Entered Annotation Mode. Draw boxes and click Save.")
 
     def _on_save_annotate(self, image_path: str, img_w: int, img_h: int, s_box: tuple, e_box: tuple, pil_image=None):
-        success = save_annotation(image_path, img_w, img_h, s_box, e_box, pil_image=pil_image)
+        dataset_dir = self.dataset_dir
+        success = save_annotation(image_path, img_w, img_h, s_box, e_box, dataset_dir=str(dataset_dir), pil_image=pil_image)
         if success:
-            (DATASET_DIR / ".needs_training").touch()
-            self._update_status(f"✅ Saved YOLO annotations for {Path(image_path).name} to {DATASET_DIR}")
+            (dataset_dir / ".needs_training").touch()
+            self._update_status(f"✅ Saved YOLO annotations for {Path(image_path).name} to {dataset_dir}")
             
             # Save the manual boxes back to the DB and display them in the viewer
             if self.current_items and 0 <= self.current_index < len(self.current_items):
@@ -1787,10 +1813,14 @@ class ImageCullerApp(ctk.CTk):
                             sharpness=item.sharpness_score,
                             tags=json.dumps(list(item.tags)) if item.tags else "",
                             detection_box=item.detection_box,
-                            eye_box=item.eye_box,
-                            manual_detection_box=item.manual_detection_box,
-                            manual_eye_box=item.manual_eye_box
+                            eye_box=item.eye_box
                         )
+                    save_manual_annotation(
+                        image_path=str(item.path),
+                        manual_detection_box=item.manual_detection_box,
+                        manual_eye_box=item.manual_eye_box,
+                        dataset_dir=str(dataset_dir)
+                    )
                         
                     show_boxes = self.db.get_show_bounding_boxes() if self.db else True
                     if show_boxes:
@@ -2052,10 +2082,12 @@ class ImageCullerApp(ctk.CTk):
             mb.showinfo("Setting Updated", f"JPG Save Destination set to: {val}")
 
     def _on_cleanup_metadata(self):
-        log_info("Opening MetadataCleanupDialog explorer modal")
-        dialog = MetadataCleanupDialog(
+        log_info("Opening SettingsDialog on Workspace tab")
+        SettingsDialog(
             self,
-            db_manager=self.db,
+            self.db,
+            initial_tab="Workspace",
+            on_save=self._on_settings_saved,
             on_cleanup_complete=self._on_cleanup_done
         )
 
@@ -2116,10 +2148,10 @@ class ImageCullerApp(ctk.CTk):
         SettingsDialog(
             self,
             self.db,
+            initial_tab="General",
             on_save=self._on_settings_saved,
             on_cleanup_metadata=self._on_cleanup_metadata,
-            on_export_manifest=self._export_manifest,
-            on_sync_exif=self._sync_exif_ratings
+            on_cleanup_complete=self._on_cleanup_done
         )
 
     def _on_settings_saved(self):

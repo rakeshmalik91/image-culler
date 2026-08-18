@@ -72,14 +72,23 @@ def train_custom_yolo(
 
             model.add_callback("on_train_epoch_end", on_epoch_end)
 
-            # Train the model
-            # We use workers=0 to prevent multiprocessing freeze on Windows
+            # Train the model with maximum throughput optimizations:
+            # - cache='ram': 0ms RAM image caching across epochs
+            # - val=False: bypasses 10-15s per-epoch validation overhead
+            # - batch=16: optimal GPU utilization
+            # - plots=False: skips disk/matplotlib plotting overhead
+            # - workers=0: prevents Windows multiprocessing freeze
             results = model.train(
                 data=str(dataset_yaml.absolute()),
                 epochs=epochs,
                 imgsz=640,
                 device=device,
                 workers=0,
+                batch=16,
+                cache="ram",
+                val=False,
+                plots=False,
+                save=True,
                 project=str(runs_dir),
                 name="culler_custom",
                 exist_ok=True, # overwrite if training again

@@ -1,35 +1,42 @@
-from typing import Callable, List, Optional
+from pathlib import Path
+from typing import Callable, Dict, List, Optional
 import customtkinter as ctk
+from tkinter import messagebox as mb
 
 from ..db_manager import DatabaseManager
+from ..logger import log_info, log_error
 
 
 class SettingsDialog(ctk.CTkToplevel):
     """
     Unified Application Settings Modal Window with Tabbed Interface.
-    Tab 1 (General): Output Folder Settings, RAW Load Scale, White Balance, Stacking, Tools.
-    Tab 2 (Tags): Manage custom image tags.
+    Tab 1 (General): Output Destination Subfolders, RAW Scale, White Balance, Tools.
+    Tab 2 (Workspace): Workspace Database File, Dataset Info, Folder Metadata Explorer & Cleanup.
+    Tab 3 (Tags): Manage custom image tags.
     """
 
     def __init__(
         self,
         master,
         db: DatabaseManager,
+        initial_tab: str = "General",
         on_save: Optional[Callable[[], None]] = None,
         on_cleanup_metadata: Optional[Callable[[], None]] = None,
-        on_export_manifest: Optional[Callable[[], None]] = None,
-        on_sync_exif: Optional[Callable[[], None]] = None
+        on_cleanup_complete: Optional[Callable[[int, List[str]], None]] = None
     ):
         super().__init__(master)
         self.db = db
+        self.initial_tab = initial_tab
         self.on_save = on_save
         self.on_cleanup_metadata = on_cleanup_metadata
-        self.on_export_manifest = on_export_manifest
-        self.on_sync_exif = on_sync_exif
+        self.on_cleanup_complete = on_cleanup_complete
+
+        self._check_vars: Dict[str, ctk.BooleanVar] = {}
+        self._folder_summary: Dict[str, Dict[str, int]] = {}
 
         self.title("⚙️ Application Settings")
-        self.geometry("540x640")
-        self.minsize(500, 520)
+        self.geometry("660x640")
+        self.minsize(580, 540)
         self.resizable(True, True)
 
         # Make modal dialog window
@@ -90,20 +97,25 @@ class SettingsDialog(ctk.CTkToplevel):
         # Header Label
         lbl_title = ctk.CTkLabel(
             self,
-            text="⚙️ Global Application Settings",
+            text="⚙️ Application Settings",
             font=ctk.CTkFont(size=16, weight="bold")
         )
         lbl_title.pack(side="top", pady=(15, 5))
 
         # Tabview
-        self.tabview = ctk.CTkTabview(self, width=500)
+        self.tabview = ctk.CTkTabview(self, width=620)
         self.tabview.pack(side="top", fill="both", expand=True, padx=15, pady=(5, 5))
 
         self.tabview.add("General")
+        self.tabview.add("Workspace")
         self.tabview.add("Tags")
 
         self._build_general_tab(self.tabview.tab("General"))
+        self._build_workspace_tab(self.tabview.tab("Workspace"))
         self._build_tags_tab(self.tabview.tab("Tags"))
+
+        if self.initial_tab in ["General", "Workspace", "Tags"]:
+            self.tabview.set(self.initial_tab)
 
     def _build_general_tab(self, tab):
         container = ctk.CTkScrollableFrame(tab, fg_color="transparent")
@@ -272,41 +284,248 @@ class SettingsDialog(ctk.CTkToplevel):
         f_tools = ctk.CTkFrame(container, fg_color="transparent")
         f_tools.pack(fill="x", pady=2)
 
-        if self.on_cleanup_metadata:
-            btn_clean = ctk.CTkButton(
-                f_tools,
-                text="🧹 Clean Database",
-                width=125,
-                fg_color="#3a3a3a",
-                hover_color="#555555",
-                font=ctk.CTkFont(size=11, weight="bold"),
-                command=self.on_cleanup_metadata
-            )
-            btn_clean.pack(side="left", padx=2)
+        # Workspace clean button jumps directly to Workspace tab
+        btn_clean = ctk.CTkButton(
+            f_tools,
+            text="🧹 Workspace & DB",
+            width=135,
+            fg_color="#3a3a3a",
+            hover_color="#555555",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            command=lambda: self.tabview.set("Workspace")
+        )
+        btn_clean.pack(side="left", padx=2)
 
-        if self.on_export_manifest:
-            btn_manifest = ctk.CTkButton(
-                f_tools,
-                text="📄 Export JSON",
-                width=120,
-                fg_color="#3a3a3a",
-                hover_color="#555555",
-                font=ctk.CTkFont(size=11, weight="bold"),
-                command=self.on_export_manifest
-            )
-            btn_manifest.pack(side="left", padx=2)
+    def _build_workspace_tab(self, tab):
+        container = ctk.CTkFrame(tab, fg_color="transparent")
+        container.pack(side="top", fill="both", expand=True, padx=5, pady=5)
 
-        if self.on_sync_exif:
-            btn_sync = ctk.CTkButton(
-                f_tools,
-                text="🔄 Sync EXIF",
-                width=120,
-                fg_color="#3a3a3a",
-                hover_color="#555555",
-                font=ctk.CTkFont(size=11, weight="bold"),
-                command=self.on_sync_exif
+        # ----------------------------------------------------
+        # Workspace File Information Header
+        # ----------------------------------------------------
+        ws_info_frame = ctk.CTkFrame(container, corner_radius=6, fg_color="#1a1a1a", border_width=1, border_color="#333333")
+        ws_info_frame.pack(fill="x", pady=(0, 8))
+
+        ws_file_path = str(self.db.db_path)
+        ws_file_name = self.db.db_path.name
+        ds_path = str(self.db.dataset_dir)
+
+        lbl_ws_title = ctk.CTkLabel(
+            ws_info_frame,
+            text=f"🗂️ Active Workspace: {ws_file_name}",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color="#3a86ff"
+        )
+        lbl_ws_title.pack(anchor="w", padx=12, pady=(8, 2))
+
+        lbl_ws_path = ctk.CTkLabel(
+            ws_info_frame,
+            text=f"Database Path: {ws_file_path}",
+            font=ctk.CTkFont(size=10, family="Consolas"),
+            text_color="#888888"
+        )
+        lbl_ws_path.pack(anchor="w", padx=12, pady=1)
+
+        lbl_ds_path = ctk.CTkLabel(
+            ws_info_frame,
+            text=f"Dataset Directory: {ds_path}",
+            font=ctk.CTkFont(size=10, family="Consolas"),
+            text_color="#888888"
+        )
+        lbl_ds_path.pack(anchor="w", padx=12, pady=(1, 8))
+
+        # ----------------------------------------------------
+        # Stored Metadata Explorer Header & Toolbar
+        # ----------------------------------------------------
+        tool_box = ctk.CTkFrame(container, fg_color="transparent")
+        tool_box.pack(side="top", fill="x", pady=(0, 6))
+
+        btn_sel_all = ctk.CTkButton(
+            tool_box,
+            text="✓ Select All",
+            width=90,
+            height=26,
+            fg_color="#333333",
+            hover_color="#555555",
+            command=self._select_all_folders
+        )
+        btn_sel_all.pack(side="left", padx=(0, 5))
+
+        btn_desel_all = ctk.CTkButton(
+            tool_box,
+            text="✗ Deselect All",
+            width=90,
+            height=26,
+            fg_color="#333333",
+            hover_color="#555555",
+            command=self._deselect_all_folders
+        )
+        btn_desel_all.pack(side="left", padx=5)
+
+        self.lbl_ws_stats = ctk.CTkLabel(
+            tool_box,
+            text="Loading stored database records...",
+            font=ctk.CTkFont(size=11, weight="bold")
+        )
+        self.lbl_ws_stats.pack(side="right", padx=5)
+
+        # Embedded Folder Tree Container (Scrollable)
+        self.ws_tree_scroll = ctk.CTkScrollableFrame(container, label_text="")
+        self.ws_tree_scroll.pack(side="top", fill="both", expand=True, pady=(0, 8))
+
+        # Action Bar for Cleanup
+        action_bar = ctk.CTkFrame(container, fg_color="transparent")
+        action_bar.pack(side="bottom", fill="x")
+
+        btn_clean_sel = ctk.CTkButton(
+            action_bar,
+            text="🧹 Clean Selected Folders",
+            fg_color="#5c0612",
+            hover_color="#d90429",
+            font=ctk.CTkFont(weight="bold"),
+            command=self._clean_selected_folders
+        )
+        btn_clean_sel.pack(side="left", padx=(0, 5))
+
+        btn_clean_all = ctk.CTkButton(
+            action_bar,
+            text="🗑️ Purge Entire Database",
+            fg_color="#5c0612",
+            hover_color="#d90429",
+            font=ctk.CTkFont(weight="bold"),
+            command=self._clean_entire_workspace_db
+        )
+        btn_clean_all.pack(side="left", padx=5)
+
+        self._load_workspace_tree_data()
+
+    def _load_workspace_tree_data(self):
+        for w in self.ws_tree_scroll.winfo_children():
+            w.destroy()
+        self._check_vars.clear()
+
+        self._folder_summary = self.db.get_stored_folders_summary()
+
+        if not self._folder_summary:
+            lbl_empty = ctk.CTkLabel(
+                self.ws_tree_scroll,
+                text="📁 No metadata records stored in database.",
+                font=ctk.CTkFont(size=13, weight="bold"),
+                text_color="#888888"
             )
-            btn_sync.pack(side="left", padx=2)
+            lbl_empty.pack(expand=True, pady=40)
+            self.lbl_ws_stats.configure(text="Database: 0 Folders, 0 Records")
+            return
+
+        total_records = sum(stats["total"] for stats in self._folder_summary.values())
+        self.lbl_ws_stats.configure(
+            text=f"Database: {len(self._folder_summary)} Folders, {total_records} Records"
+        )
+
+        sorted_folders = sorted(self._folder_summary.keys(), key=lambda x: x.lower())
+
+        for folder_path in sorted_folders:
+            stats = self._folder_summary[folder_path]
+
+            row_frame = ctk.CTkFrame(self.ws_tree_scroll, fg_color="#2b2b2b", corner_radius=4)
+            row_frame.pack(fill="x", padx=2, pady=3)
+
+            var = ctk.BooleanVar(value=False)
+            self._check_vars[folder_path] = var
+
+            chk = ctk.CTkCheckBox(
+                row_frame,
+                text="",
+                variable=var,
+                width=24,
+                checkbox_width=18,
+                checkbox_height=18
+            )
+            chk.pack(side="left", padx=(8, 4), pady=6)
+
+            folder_name = Path(folder_path).name or folder_path
+            lbl_folder = ctk.CTkLabel(
+                row_frame,
+                text=f"📁 {folder_name}",
+                font=ctk.CTkFont(size=12, weight="bold"),
+                anchor="w"
+            )
+            lbl_folder.pack(side="left", padx=4)
+
+            badge_text = (
+                f"{stats['total']} photos  |  "
+                f"Pick: {stats['pick']}, Reject: {stats['reject']}, Unflagged: {stats['unflagged']}"
+            )
+            lbl_badge = ctk.CTkLabel(
+                row_frame,
+                text=badge_text,
+                font=ctk.CTkFont(size=10),
+                text_color="#a0a0a0",
+                anchor="e"
+            )
+            lbl_badge.pack(side="right", padx=10)
+
+            lbl_path = ctk.CTkLabel(
+                row_frame,
+                text=folder_path,
+                font=ctk.CTkFont(size=10, family="Consolas"),
+                text_color="#777777",
+                anchor="w"
+            )
+            lbl_path.pack(side="left", padx=8)
+
+        try:
+            self.ws_tree_scroll.update_idletasks()
+        except Exception:
+            pass
+
+    def _select_all_folders(self):
+        for var in self._check_vars.values():
+            var.set(True)
+
+    def _deselect_all_folders(self):
+        for var in self._check_vars.values():
+            var.set(False)
+
+    def _clean_selected_folders(self):
+        selected = [fp for fp, var in self._check_vars.items() if var.get()]
+        if not selected:
+            mb.showwarning("Clean Up Metadata", "No folders selected. Please check at least one folder to clean.")
+            return
+
+        total_to_delete = sum(self._folder_summary[fp]["total"] for fp in selected if fp in self._folder_summary)
+
+        ans = mb.askyesno(
+            "Confirm Metadata Cleanup",
+            f"Are you sure you want to clean up stored metadata for {len(selected)} selected folder(s)?\n\n"
+            f"This will delete {total_to_delete} stored culling records from workspace database."
+        )
+        if ans:
+            deleted_count = self.db.cleanup_multiple_folders(selected)
+            log_info(f"SettingsDialog: Cleaned up {deleted_count} records across {len(selected)} folders.")
+            mb.showinfo("Cleanup Complete", f"Successfully cleaned up {deleted_count} database records!")
+            
+            if self.on_cleanup_complete:
+                self.on_cleanup_complete(deleted_count, selected)
+
+            self._load_workspace_tree_data()
+
+    def _clean_entire_workspace_db(self):
+        ans = mb.askyesno(
+            "PURGE ENTIRE DATABASE",
+            "WARNING: This will permanently delete ALL stored culling records, ratings, and tags from workspace database!\n\n"
+            "Are you sure you want to purge the entire database?",
+            icon="warning"
+        )
+        if ans:
+            deleted_count = self.db.cleanup_entire_database()
+            log_info(f"SettingsDialog: Purged entire database ({deleted_count} records deleted).")
+            mb.showinfo("Database Purged", f"Successfully purged {deleted_count} total database records!")
+
+            if self.on_cleanup_complete:
+                self.on_cleanup_complete(deleted_count, list(self._folder_summary.keys()))
+
+            self._load_workspace_tree_data()
 
     def _build_tags_tab(self, tab):
         container = ctk.CTkFrame(tab, fg_color="transparent")

@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -294,6 +295,32 @@ class TestCullingEngine(unittest.TestCase):
         self.assertIn(file_path, records)
         self.assertIsNone(records[file_path]["detection_box"])
         self.assertIsNone(records[file_path]["eye_box"])
+
+    @patch("culler.culler_engine.load_manual_annotations")
+    def test_manual_bounding_box_loaded_from_dataset(self, mock_load_annotations):
+        """
+        Verify that manual bounding boxes are loaded from _DATASET/annotations.json instead of SQLite DB.
+        """
+        photo_dir = Path(tempfile.mkdtemp())
+        photo_path = photo_dir / "PHOTO_001.JPG"
+        photo_path.touch()
+
+        mock_load_annotations.return_value = {
+            str(photo_path.resolve()): {
+                "manual_detection_box": (0.1, 0.2, 0.6, 0.7),
+                "manual_eye_box": (0.3, 0.4, 0.5, 0.55),
+                "filename": "PHOTO_001.JPG"
+            }
+        }
+
+        try:
+            items = self.session.scan_directory(photo_dir)
+            self.assertEqual(len(items), 1)
+            item = items[0]
+            self.assertEqual(item.manual_detection_box, (0.1, 0.2, 0.6, 0.7))
+            self.assertEqual(item.manual_eye_box, (0.3, 0.4, 0.5, 0.55))
+        finally:
+            shutil.rmtree(photo_dir, ignore_errors=True)
 
     @patch.object(CullingSession, "compute_sharpness_scores")
     def test_scan_for_blur_sensitivity_one_percent(self, mock_compute_scores):
